@@ -102,11 +102,11 @@ describe("register node types", () => {
 
         Sum.prototype.onPropertyChange = true;
         lg.LiteGraph.registerNodeType("math/sum", Sum);
-        expect(consoleSpy).toBeCalledTimes(1);
-        expect(consoleSpy).toBeCalledWith(
+        expect(consoleSpy).toHaveBeenCalledTimes(1);
+        expect(consoleSpy).toHaveBeenCalledWith(
             expect.stringContaining("has onPropertyChange method")
         );
-        expect(consoleSpy).toBeCalledWith(expect.stringContaining("math/sum"));
+        expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("math/sum"));
     });
 
     test("registering supported file extensions", () => {

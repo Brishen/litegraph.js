@@ -408,7 +408,7 @@
 			min_x = Math.min( node.pos[0], min_x );
 			max_x = Math.max( node.pos[0], min_x );
 		}
-		
+
 		var last_input_y = 0;
 		var last_output_y = 0;
 
@@ -489,7 +489,7 @@
 			name: "",
 			type: "number",
 			value: 0
-		}; 
+		};
 
         var that = this;
 
@@ -723,7 +723,7 @@
         else if (name == "value") {
         }
     }
-     
+
     GraphOutput.prototype.updateType = function () {
         var type = this.properties.type;
         if (this.type_widget)
@@ -1024,7 +1024,7 @@ JSONParse.prototype.onAction = function(name) {
 		this.parse();
 }
 
-LiteGraph.registerNodeType("basic/jsonparse", JSONParse);	
+LiteGraph.registerNodeType("basic/jsonparse", JSONParse);
 
 	//to store json objects
     function ConstantData() {
@@ -1669,8 +1669,8 @@ LiteGraph.registerNodeType("basic/jsonparse", JSONParse);
     };
 
     LiteGraph.registerNodeType("basic/script", NodeScript);
-    
-    
+
+
     function GenericCompare() {
         this.addInput("A", 0);
         this.addInput("B", 0);
@@ -1766,5 +1766,5 @@ LiteGraph.registerNodeType("basic/jsonparse", JSONParse);
     };
 
     LiteGraph.registerNodeType("basic/CompareValues", GenericCompare);
-    
-})(this);
+
+})(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));

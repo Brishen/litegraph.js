@@ -14409,16 +14409,16 @@ LGraphNode.prototype.executeAction = function(action)
                 window.setTimeout(callback, 1000 / 60);
             };
     }
-})(this);
+})(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));
 
 if (typeof exports != "undefined") {
-    exports.LiteGraph = this.LiteGraph;
-    exports.LGraph = this.LGraph;
-    exports.LLink = this.LLink;
-    exports.LGraphNode = this.LGraphNode;
-    exports.LGraphGroup = this.LGraphGroup;
-    exports.DragAndScale = this.DragAndScale;
-    exports.LGraphCanvas = this.LGraphCanvas;
-    exports.ContextMenu = this.ContextMenu;
+    exports.LiteGraph = (this && this.LiteGraph) || (typeof window !== "undefined" && window.LiteGraph) || (typeof global !== "undefined" && global.LiteGraph);
+    exports.LGraph = (this && this.LGraph) || (typeof window !== "undefined" && window.LGraph) || (typeof global !== "undefined" && global.LGraph);
+    exports.LLink = (this && this.LLink) || (typeof window !== "undefined" && window.LLink) || (typeof global !== "undefined" && global.LLink);
+    exports.LGraphNode = (this && this.LGraphNode) || (typeof window !== "undefined" && window.LGraphNode) || (typeof global !== "undefined" && global.LGraphNode);
+    exports.LGraphGroup = (this && this.LGraphGroup) || (typeof window !== "undefined" && window.LGraphGroup) || (typeof global !== "undefined" && global.LGraphGroup);
+    exports.DragAndScale = (this && this.DragAndScale) || (typeof window !== "undefined" && window.DragAndScale) || (typeof global !== "undefined" && global.DragAndScale);
+    exports.LGraphCanvas = (this && this.LGraphCanvas) || (typeof window !== "undefined" && window.LGraphCanvas) || (typeof global !== "undefined" && global.LGraphCanvas);
+    exports.ContextMenu = (this && this.ContextMenu) || (typeof window !== "undefined" && window.ContextMenu) || (typeof global !== "undefined" && global.ContextMenu);
 }
 
