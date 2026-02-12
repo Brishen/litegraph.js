@@ -42,6 +42,9 @@ export function LiteGraphCanvas(props) {
             if(canvas.unbindEvents) {
                 canvas.unbindEvents();
             }
+            if(canvas.stopRendering) {
+                canvas.stopRendering();
+            }
         };
     }, []);
 

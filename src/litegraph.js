@@ -5773,9 +5773,9 @@ LGraphNode.prototype.executeAction = function(action)
         var ref_window = this.getCanvasWindow();
         var document = ref_window.document;
 
-		LiteGraph.pointerListenerRemove(this.canvas,"move", this._mousedown_callback);
-        LiteGraph.pointerListenerRemove(this.canvas,"up", this._mousedown_callback);
-        LiteGraph.pointerListenerRemove(this.canvas,"down", this._mousedown_callback);
+		LiteGraph.pointerListenerRemove(this.canvas,"move", this._mousemove_callback);
+        LiteGraph.pointerListenerRemove(this.canvas,"up", this._mouseup_callback, true);
+        LiteGraph.pointerListenerRemove(this.canvas,"down", this._mousedown_callback, true);
         this.canvas.removeEventListener(
             "mousewheel",
             this._mousewheel_callback
@@ -5784,8 +5784,8 @@ LGraphNode.prototype.executeAction = function(action)
             "DOMMouseScroll",
             this._mousewheel_callback
         );
-        this.canvas.removeEventListener("keydown", this._key_callback);
-        document.removeEventListener("keyup", this._key_callback);
+        this.canvas.removeEventListener("keydown", this._key_callback, true);
+        document.removeEventListener("keyup", this._key_callback, true);
         this.canvas.removeEventListener("contextmenu", this._doNothing);
         this.canvas.removeEventListener("drop", this._ondrop_callback);
         this.canvas.removeEventListener("dragenter", this._doReturnTrue);
