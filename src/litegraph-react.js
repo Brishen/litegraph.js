@@ -1,5 +1,10 @@
 import React, { useRef, useEffect } from "react";
-import { LiteGraph, LGraph, LGraphCanvas } from "./litegraph.js";
+import * as LiteGraphModule from "./litegraph.js";
+
+// Attempt to get LiteGraph from module exports or global scope
+const LiteGraph = LiteGraphModule.LiteGraph || (typeof window !== 'undefined' ? window.LiteGraph : null);
+const LGraph = LiteGraphModule.LGraph || (LiteGraph ? LiteGraph.LGraph : null);
+const LGraphCanvas = LiteGraphModule.LGraphCanvas || (LiteGraph ? LiteGraph.LGraphCanvas : null);
 
 export function LiteGraphCanvas(props) {
     const canvasRef = useRef(null);
@@ -11,6 +16,10 @@ export function LiteGraphCanvas(props) {
 
     useEffect(() => {
         if (!canvasRef.current) return;
+        if (!LGraph || !LGraphCanvas) {
+            console.error("LiteGraph not loaded");
+            return;
+        }
 
         const graph = new LGraph();
         const canvas = new LGraphCanvas(canvasRef.current, graph);
@@ -30,13 +39,11 @@ export function LiteGraphCanvas(props) {
         return () => {
             window.removeEventListener("resize", resize);
             graph.stop();
-            // LGraphCanvas binds events to the canvas element on creation.
-            // We must unbind them to prevent leaks if the component re-mounts.
             if(canvas.unbindEvents) {
                 canvas.unbindEvents();
             }
         };
-    }, []); // Run only once on mount
+    }, []);
 
     return React.createElement("canvas", {
         ref: canvasRef,

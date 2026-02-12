@@ -31,7 +31,7 @@ Although it is easy to create new node types, LiteGraph comes with some default 
 
 ## Installation
 
-You can install it using npm 
+You can install it using npm
 ```
 npm install litegraph.js
 ```
@@ -136,6 +136,28 @@ node_time.connect( 0, node_console, 1 );
 graph.start()
 ```
 
+## React Support
+
+You can import the `LiteGraphCanvas` component from `litegraph.js/src/litegraph-react.js`.
+
+```javascript
+import { LiteGraphCanvas } from 'litegraph.js/src/litegraph-react.js';
+import 'litegraph.js/css/litegraph.css';
+
+function App() {
+  return (
+    <LiteGraphCanvas
+      onLoad={(graph, canvas) => {
+        // graph and canvas setup here
+        graph.start();
+      }}
+    />
+  );
+}
+```
+
+Check the `react-demo` folder for a complete example using Vite.
+
 
 ## Projects using it
 
@@ -187,6 +209,3 @@ You can write any feedback to javi.agenjo@gmail.com
 - coderofsalvation
 - ilyabesk
 - gausszhou
-
-
-
