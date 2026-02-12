@@ -7184,7 +7184,7 @@ LGraphNode.prototype.executeAction = function(action)
             }
 
             //delete or backspace
-            if (e.keyCode == 46 || e.keyCode == 8) {
+            if (e.keyCode == 46 || e.keyCode == 8 || e.key == "Delete" || e.code == "Delete" || e.key == "Backspace") {
                 if (
                     e.target.localName != "input" &&
                     e.target.localName != "textarea"
