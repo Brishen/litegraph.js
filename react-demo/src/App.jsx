@@ -1,11 +1,14 @@
 import { useState, useCallback } from 'react'
 import { LiteGraphCanvas } from '../../src/litegraph-react.js'
 import * as LiteGraphModule from '../../src/litegraph.js'
+import '../../src/nodes/base.js'
+import '../../css/litegraph.css'
 
 function App() {
   const [count, setCount] = useState(0)
 
   const onLoad = useCallback((graph, canvas) => {
+    // Attempt to get LiteGraph from module exports or global scope
     const LiteGraph = LiteGraphModule.LiteGraph || window.LiteGraph;
 
     // This function is called when the graph is loaded
