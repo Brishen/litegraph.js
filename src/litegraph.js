@@ -14412,13 +14412,19 @@ LGraphNode.prototype.executeAction = function(action)
 })(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));
 
 if (typeof exports != "undefined") {
-    exports.LiteGraph = (this && this.LiteGraph) || (typeof window !== "undefined" && window.LiteGraph) || (typeof global !== "undefined" && global.LiteGraph);
-    exports.LGraph = (this && this.LGraph) || (typeof window !== "undefined" && window.LGraph) || (typeof global !== "undefined" && global.LGraph);
-    exports.LLink = (this && this.LLink) || (typeof window !== "undefined" && window.LLink) || (typeof global !== "undefined" && global.LLink);
-    exports.LGraphNode = (this && this.LGraphNode) || (typeof window !== "undefined" && window.LGraphNode) || (typeof global !== "undefined" && global.LGraphNode);
-    exports.LGraphGroup = (this && this.LGraphGroup) || (typeof window !== "undefined" && window.LGraphGroup) || (typeof global !== "undefined" && global.LGraphGroup);
-    exports.DragAndScale = (this && this.DragAndScale) || (typeof window !== "undefined" && window.DragAndScale) || (typeof global !== "undefined" && global.DragAndScale);
-    exports.LGraphCanvas = (this && this.LGraphCanvas) || (typeof window !== "undefined" && window.LGraphCanvas) || (typeof global !== "undefined" && global.LGraphCanvas);
-    exports.ContextMenu = (this && this.ContextMenu) || (typeof window !== "undefined" && window.ContextMenu) || (typeof global !== "undefined" && global.ContextMenu);
+    //LLink, DragAndScale and ContextMenu are only ever attached to the LiteGraph
+    //namespace, never to the global object, so read the namespace first.
+    var _lg_scope = (typeof window !== "undefined" && window) || (typeof global !== "undefined" && global) || (typeof self !== "undefined" && self) || this;
+    var _lg_ns = _lg_scope && _lg_scope.LiteGraph;
+    if (_lg_ns) {
+        exports.LiteGraph = _lg_ns;
+        exports.LGraph = _lg_ns.LGraph || _lg_scope.LGraph;
+        exports.LLink = _lg_ns.LLink || _lg_scope.LLink;
+        exports.LGraphNode = _lg_ns.LGraphNode || _lg_scope.LGraphNode;
+        exports.LGraphGroup = _lg_ns.LGraphGroup || _lg_scope.LGraphGroup;
+        exports.DragAndScale = _lg_ns.DragAndScale || _lg_scope.DragAndScale;
+        exports.LGraphCanvas = _lg_ns.LGraphCanvas || _lg_scope.LGraphCanvas;
+        exports.ContextMenu = _lg_ns.ContextMenu || _lg_scope.ContextMenu;
+    }
 }
 

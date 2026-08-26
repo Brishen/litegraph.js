@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { LiteGraphCanvas } from '../../src/litegraph-react.js'
-import * as LiteGraphModule from '../../src/litegraph.js'
+import { LiteGraphCanvas } from '../../src/litegraph-react.mjs'
+import { LiteGraph } from '../../src/litegraph.mjs'
 import '../../src/nodes/base.js'
 import '../../css/litegraph.css'
 
@@ -10,18 +10,10 @@ function App() {
   const canvasRef = useRef(null)
 
   const onLoad = useCallback((graph, canvas) => {
-    // Attempt to get LiteGraph from module exports or global scope
-    const LiteGraph = LiteGraphModule.LiteGraph || window.LiteGraph;
-
     canvasRef.current = canvas;
 
     // This function is called when the graph is loaded
     console.log("Graph loaded", graph, canvas);
-
-    if(!LiteGraph) {
-        console.error("LiteGraph not found");
-        return;
-    }
 
     // Create a node
     var node_const = LiteGraph.createNode("basic/const");
@@ -40,9 +32,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const LiteGraph = LiteGraphModule.LiteGraph || window.LiteGraph;
-    if (!LiteGraph) return;
-
     if (theme === 'light') {
         LiteGraph.NODE_DEFAULT_BGCOLOR = "#FFF";
         LiteGraph.NODE_DEFAULT_COLOR = "#EEE";

@@ -1,19 +1,27 @@
 module.exports = function (grunt) {
   grunt.initConfig({
     pkg: grunt.file.readJSON('package.json'),
+    // Keep in sync with the node packs in src/nodes/. The previous list referenced a
+    // non-existent src/nodes/image.js and omitted six packs that the shipped build
+    // actually contained, so regenerating it silently dropped ~43 node registrations.
     projectFiles: ['src/litegraph.js',
       'src/nodes/base.js',
       'src/nodes/events.js',
       'src/nodes/interface.js',
       'src/nodes/input.js',
       'src/nodes/math.js',
+      'src/nodes/math3d.js',
       'src/nodes/logic.js',
-      'src/nodes/image.js',
+      'src/nodes/strings.js',
       'src/nodes/gltextures.js',
       'src/nodes/glfx.js',
+      'src/nodes/glshaders.js',
+      'src/nodes/geometry.js',
+      'src/nodes/graphics.js',
       'src/nodes/midi.js',
       'src/nodes/audio.js',
-      'src/nodes/network.js'
+      'src/nodes/network.js',
+      'src/nodes/others.js'
     ],
     concat: {
       build: {
@@ -24,7 +32,8 @@ module.exports = function (grunt) {
     closureCompiler: {
 
       options: {
-        compilerFile: 'node_modules/google-closure-compiler/compiler.jar',
+        // google-closure-compiler ships the jar in its -java companion package.
+        compilerFile: 'node_modules/google-closure-compiler-java/compiler.jar',
         compilerOpts: {
           formatting: 'pretty_print',
           warning_level: 'default'

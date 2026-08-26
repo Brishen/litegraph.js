@@ -1,10 +1,5 @@
 import React, { useRef, useEffect } from "react";
-import * as LiteGraphModule from "./litegraph.js";
-
-// Attempt to get LiteGraph from module exports or global scope
-const LiteGraph = LiteGraphModule.LiteGraph || (typeof window !== 'undefined' ? window.LiteGraph : null);
-const LGraph = LiteGraphModule.LGraph || (LiteGraph ? LiteGraph.LGraph : null);
-const LGraphCanvas = LiteGraphModule.LGraphCanvas || (LiteGraph ? LiteGraph.LGraphCanvas : null);
+import { LGraph, LGraphCanvas } from "./litegraph.mjs";
 
 export function LiteGraphCanvas(props) {
     const canvasRef = useRef(null);
@@ -16,10 +11,6 @@ export function LiteGraphCanvas(props) {
 
     useEffect(() => {
         if (!canvasRef.current) return;
-        if (!LGraph || !LGraphCanvas) {
-            console.error("LiteGraph not loaded");
-            return;
-        }
 
         const graph = new LGraph();
         const canvas = new LGraphCanvas(canvasRef.current, graph);
@@ -39,7 +30,7 @@ export function LiteGraphCanvas(props) {
         return () => {
             window.removeEventListener("resize", resize);
             graph.stop();
-            if(canvas.unbindEvents) {
+            if (canvas.unbindEvents) {
                 canvas.unbindEvents();
             }
         };
@@ -53,3 +44,5 @@ export function LiteGraphCanvas(props) {
         ...props.canvasProps
     });
 }
+
+export default LiteGraphCanvas;
