@@ -1834,6 +1834,6 @@ float iqnoise( in vec2 x, float u, float v ){\n\
 
 	registerShaderNode( "math/remap", LGraphShaderRemap );
 
-})(this);
+})(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));
 
 

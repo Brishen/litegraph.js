@@ -1453,4 +1453,4 @@ LiteGraph.registerNodeType("audio/waveShaper", LGAudioWaveShaper);
     LGAudioDestination.title = "Destination";
     LGAudioDestination.desc = "Audio output";
     LiteGraph.registerNodeType("audio/destination", LGAudioDestination);
-})(this);
+})(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));
