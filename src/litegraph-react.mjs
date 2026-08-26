@@ -66,6 +66,13 @@ export function LiteGraphCanvas(props) {
         return () => {
             window.removeEventListener("resize", resize);
             graph.stop();
+            // LGraphCanvas drives its own requestAnimationFrame loop from the
+            // constructor. Without this it keeps drawing into a detached element
+            // for the life of the page - twice over under React StrictMode, which
+            // mounts, unmounts and remounts every effect in development.
+            if (canvas.stopRendering) {
+                canvas.stopRendering();
+            }
             if (canvas.unbindEvents) {
                 canvas.unbindEvents();
             }

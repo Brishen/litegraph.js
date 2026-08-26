@@ -545,6 +545,15 @@
     };
 
     WidgetHSlider.prototype.onExecute = function() {
+        //the normalised position starts as a sentinel; resolve it here as well as
+        //in onDrawForeground, otherwise a graph that runs before it is ever drawn
+        //(headless, offscreen, or paused) emits a value outside min..max
+        if (this.value == -1) {
+            this.value =
+                (this.properties.value - this.properties.min) /
+                (this.properties.max - this.properties.min);
+        }
+
         this.properties.value =
             this.properties.min +
             (this.properties.max - this.properties.min) * this.value;
@@ -795,4 +804,4 @@
     };
 
     LiteGraph.registerNodeType("widget/panel", WidgetPanel);
-})(this);
+})(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));

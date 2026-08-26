@@ -1583,4 +1583,4 @@
     function now() {
         return window.performance.now();
     }
-})(this);
+})(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));

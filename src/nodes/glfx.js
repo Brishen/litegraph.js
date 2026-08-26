@@ -785,4 +785,4 @@
         LiteGraph.registerNodeType("fx/vigneting", LGraphFXVigneting);
         global.LGraphFXVigneting = LGraphFXVigneting;
     }
-})(this);
+})(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));

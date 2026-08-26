@@ -1,114 +1,377 @@
-import { useState, useCallback, useEffect } from 'react'
-import { LiteGraphCanvas, LiteGraphThemeProvider } from '../../src/litegraph-react.mjs'
-import { LiteGraph } from '../../src/litegraph.mjs'
-import '../../src/nodes/base.js'
-import '../../css/litegraph.css'
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import "./demoSetup.js";
+import "../../css/litegraph.css";
 
-// Themes are plain objects handed to a canvas as a prop. Nothing here mutates the
-// LiteGraph globals, so two canvases can be themed differently at the same time.
-const DARK = {
-  NODE_DEFAULT_BGCOLOR: '#353535',
-  NODE_DEFAULT_COLOR: '#333',
-  NODE_TITLE_COLOR: '#999',
-  NODE_SELECTED_TITLE_COLOR: '#FFF',
-  NODE_TEXT_COLOR: '#AAA',
-  NODE_BOX_OUTLINE_COLOR: '#FFF',
-  DEFAULT_SHADOW_COLOR: 'rgba(0,0,0,0.5)',
-  WIDGET_BGCOLOR: '#222',
-  WIDGET_OUTLINE_COLOR: '#666',
-  WIDGET_TEXT_COLOR: '#DDD',
-  LINK_COLOR: '#9A9',
-  EVENT_LINK_COLOR: '#A86',
-  CANVAS_BACKGROUND_COLOR: '#222',
+import EditorCanvas from "./components/EditorCanvas.jsx";
+import Inspector from "./components/Inspector.jsx";
+import JsonPanel from "./components/JsonPanel.jsx";
+import NodePalette from "./components/NodePalette.jsx";
+import SignalRail from "./components/SignalRail.jsx";
+import Toolbar from "./components/Toolbar.jsx";
+
+import { DEFAULT_EXAMPLE_ID, EXAMPLES, loadExample } from "./examples.js";
+import {
+    DEFAULT_SPLIT_THEME_ID,
+    DEFAULT_THEME_ID,
+    THEMES,
+    getTheme,
+} from "./themes.js";
+import {
+    addNode,
+    fitToGraph,
+    readOutputValue,
+    readStats,
+    savePatch,
+    viewportCenter,
+} from "./graphTools.js";
+
+const MemoPalette = memo(NodePalette);
+const MemoToolbar = memo(Toolbar);
+
+const EMPTY_STATS = { nodes: 0, links: 0, iteration: 0, elapsed: 0, fps: 0, running: false };
+
+export default function App() {
+    const graphRef = useRef(null);
+    const canvasRef = useRef(null);
+    const secondaryRef = useRef(null);
+    const selectedRef = useRef(null);
+    const runningRef = useRef(true);
+    const exampleRef = useRef(DEFAULT_EXAMPLE_ID);
+
+    const [themeId, setThemeId] = useState(DEFAULT_THEME_ID);
+    const [splitThemeId, setSplitThemeId] = useState(DEFAULT_SPLIT_THEME_ID);
+    const [split, setSplit] = useState(false);
+    const [exampleId, setExampleId] = useState(DEFAULT_EXAMPLE_ID);
+    const [selected, setSelected] = useState(null);
+    const [running, setRunning] = useState(true);
+    const [jsonOpen, setJsonOpen] = useState(false);
+    const [, setTick] = useState(0);
+
+    const theme = getTheme(themeId);
+    const splitTheme = getTheme(splitThemeId);
+
+    selectedRef.current = selected;
+    runningRef.current = running;
+    exampleRef.current = exampleId;
+
+    const refresh = useCallback(() => setTick((value) => value + 1), []);
+
+    /* ------------------------------------------------------------- lifecycle */
+
+    const handleReady = useCallback(
+        (graph, canvas) => {
+            graphRef.current = graph;
+            canvasRef.current = canvas;
+            // The status rail below reports all of this, and better.
+            canvas.show_info = false;
+
+            canvas.onSelectionChange = (nodes) => {
+                const list = nodes ? Object.values(nodes) : [];
+                setSelected(list.length ? list[0] : null);
+            };
+
+            loadExample(graph, exampleRef.current);
+            // The wrapper starts the graph right after this callback returns, so
+            // there is nothing to start here - just line the view up on the patch.
+            requestAnimationFrame(() => fitToGraph(canvas));
+            refresh();
+        },
+        [refresh]
+    );
+
+    // The second pane is another view of the same graph, not another graph. The
+    // wrapper hands every canvas a fresh LGraph; this one gets pointed at the
+    // primary graph instead, and its own empty graph is stopped once it starts.
+    const handleSecondaryReady = useCallback((ownGraph, canvas) => {
+        const primary = graphRef.current;
+        if (!primary) {
+            return;
+        }
+        secondaryRef.current = canvas;
+        canvas.show_info = false;
+        canvas.onSelectionChange = (nodes) => {
+            const list = nodes ? Object.values(nodes) : [];
+            setSelected(list.length ? list[0] : null);
+        };
+        canvas.setGraph(primary);
+        queueMicrotask(() => ownGraph.stop());
+        requestAnimationFrame(() => fitToGraph(canvas));
+    }, []);
+
+    // Closing the split pane unmounts its canvas, but the graph still holds a
+    // reference to it. Detach so it stops being drawn into.
+    useEffect(() => {
+        if (split) {
+            return;
+        }
+        const canvas = secondaryRef.current;
+        if (canvas) {
+            if (canvas.stopRendering) {
+                canvas.stopRendering();
+            }
+            if (graphRef.current) {
+                graphRef.current.detachCanvas(canvas);
+            }
+            secondaryRef.current = null;
+        }
+    }, [split]);
+
+    useEffect(() => {
+        const save = () => {
+            if (graphRef.current) {
+                savePatch(graphRef.current);
+            }
+        };
+        window.addEventListener("beforeunload", save);
+        return () => window.removeEventListener("beforeunload", save);
+    }, []);
+
+    // One heartbeat drives every live readout in the chrome. The canvas draws on
+    // its own rAF loop; this only paces React.
+    useEffect(() => {
+        const id = window.setInterval(refresh, 200);
+        return () => window.clearInterval(id);
+    }, [refresh]);
+
+    /* --------------------------------------------------------------- actions */
+
+    const toggleRun = useCallback(() => {
+        const graph = graphRef.current;
+        if (!graph) {
+            return;
+        }
+        if (runningRef.current) {
+            graph.stop();
+            setRunning(false);
+        } else {
+            graph.start();
+            setRunning(true);
+        }
+    }, []);
+
+    const step = useCallback(() => {
+        const graph = graphRef.current;
+        if (!graph) {
+            return;
+        }
+        if (runningRef.current) {
+            graph.stop();
+            setRunning(false);
+        }
+        graph.runStep(1);
+        graph.setDirtyCanvas(true, true);
+        refresh();
+    }, [refresh]);
+
+    const fit = useCallback(() => {
+        fitToGraph(canvasRef.current);
+        if (secondaryRef.current) {
+            fitToGraph(secondaryRef.current);
+        }
+    }, []);
+
+    const applyExample = useCallback(
+        (id) => {
+            const graph = graphRef.current;
+            if (!graph) {
+                return;
+            }
+            setExampleId(id);
+            exampleRef.current = id;
+            loadExample(graph, id);
+            setSelected(null);
+            if (runningRef.current) {
+                graph.start();
+            }
+            fit();
+            refresh();
+        },
+        [fit, refresh]
+    );
+
+    const clearGraph = useCallback(() => {
+        const graph = graphRef.current;
+        if (!graph) {
+            return;
+        }
+        graph.clear();
+        setSelected(null);
+        if (runningRef.current) {
+            graph.start();
+        }
+        refresh();
+    }, [refresh]);
+
+    const addFromPalette = useCallback(
+        (type) => {
+            const graph = graphRef.current;
+            const canvas = canvasRef.current;
+            if (!graph || !canvas) {
+                return;
+            }
+            const center = viewportCenter(canvas);
+            // Stagger repeat clicks so nodes do not stack in one spot.
+            const drift = (graph._nodes.length % 6) * 24;
+            addNode(graph, canvas, type, [center[0] - 90 + drift, center[1] - 40 + drift]);
+            refresh();
+        },
+        [refresh]
+    );
+
+    const dropFromPalette = useCallback(
+        (type, pos) => {
+            const graph = graphRef.current;
+            if (!graph) {
+                return;
+            }
+            addNode(graph, canvasRef.current, type, pos);
+            refresh();
+        },
+        [refresh]
+    );
+
+    const removeSelected = useCallback(() => {
+        const graph = graphRef.current;
+        if (!graph || !selectedRef.current) {
+            return;
+        }
+        graph.remove(selectedRef.current);
+        setSelected(null);
+        refresh();
+    }, [refresh]);
+
+    const centerSelected = useCallback(() => {
+        if (canvasRef.current && selectedRef.current) {
+            canvasRef.current.centerOnNode(selectedRef.current);
+        }
+    }, []);
+
+    const inspectorChanged = useCallback(() => {
+        if (graphRef.current) {
+            graphRef.current.setDirtyCanvas(true, true);
+        }
+        refresh();
+    }, [refresh]);
+
+    const afterImport = useCallback(() => {
+        const graph = graphRef.current;
+        if (!graph) {
+            return;
+        }
+        setSelected(null);
+        if (runningRef.current) {
+            graph.start();
+        }
+        fit();
+        refresh();
+    }, [fit, refresh]);
+
+    /* ------------------------------------------------------------- shortcuts */
+
+    useEffect(() => {
+        const onKey = (event) => {
+            const target = event.target;
+            const typing =
+                target &&
+                (target.tagName === "INPUT" ||
+                    target.tagName === "TEXTAREA" ||
+                    target.tagName === "SELECT" ||
+                    target.isContentEditable);
+            if (typing || event.metaKey || event.ctrlKey || event.altKey) {
+                return;
+            }
+            if (event.key === "r") {
+                toggleRun();
+            } else if (event.key === "s") {
+                step();
+            } else if (event.key === "f") {
+                fit();
+            } else if (event.key === "j") {
+                setJsonOpen((open) => !open);
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [fit, step, toggleRun]);
+
+    /* ---------------------------------------------------------------- render */
+
+    const stats = graphRef.current
+        ? readStats(graphRef.current, canvasRef.current)
+        : EMPTY_STATS;
+
+    const readSignal = useCallback(() => {
+        const node = selectedRef.current;
+        if (!node) {
+            return 0;
+        }
+        const value = readOutputValue(node, 0);
+        return typeof value === "number" ? value : 0;
+    }, []);
+
+    const meterLabel = selected
+        ? selected.title + " · out 0"
+        : "select a node to meter it";
+
+    return (
+        <div className="bench" style={theme.chrome} data-scheme={theme.scheme}>
+            <MemoToolbar
+                examples={EXAMPLES}
+                exampleId={exampleId}
+                onExample={applyExample}
+                themes={THEMES}
+                themeId={themeId}
+                onTheme={setThemeId}
+                splitThemeId={splitThemeId}
+                onSplitTheme={setSplitThemeId}
+                split={split}
+                onToggleSplit={() => setSplit((value) => !value)}
+                running={running}
+                onToggleRun={toggleRun}
+                onStep={step}
+                onFit={fit}
+                onClear={clearGraph}
+                jsonOpen={jsonOpen}
+                onToggleJson={() => setJsonOpen((open) => !open)}
+            />
+
+            <main className="bench__body" data-json={jsonOpen ? "open" : "closed"}>
+                <MemoPalette onAdd={addFromPalette} />
+
+                <div className={"stage" + (split ? " stage--split" : "")}>
+                    <EditorCanvas
+                        theme={theme.canvas}
+                        label={split ? theme.label : null}
+                        onReady={handleReady}
+                        onDropType={dropFromPalette}
+                    />
+                    {split ? (
+                        <EditorCanvas
+                            theme={splitTheme.canvas}
+                            label={splitTheme.label}
+                            onReady={handleSecondaryReady}
+                            onDropType={dropFromPalette}
+                        />
+                    ) : null}
+                </div>
+
+                {jsonOpen ? (
+                    <JsonPanel
+                        graph={graphRef.current}
+                        onApplied={afterImport}
+                        onClose={() => setJsonOpen(false)}
+                    />
+                ) : (
+                    <Inspector
+                        node={selected}
+                        onChange={inspectorChanged}
+                        onRemove={removeSelected}
+                        onCenter={centerSelected}
+                    />
+                )}
+            </main>
+
+            <SignalRail stats={stats} meterLabel={meterLabel} readSignal={readSignal} />
+        </div>
+    );
 }
-
-const LIGHT = {
-  NODE_DEFAULT_BGCOLOR: '#FFF',
-  NODE_DEFAULT_COLOR: '#EEE',
-  NODE_TITLE_COLOR: '#000',
-  NODE_SELECTED_TITLE_COLOR: '#000',
-  NODE_TEXT_COLOR: '#333',
-  NODE_BOX_OUTLINE_COLOR: '#000',
-  DEFAULT_SHADOW_COLOR: 'rgba(0,0,0,0.2)',
-  WIDGET_BGCOLOR: '#EAEAEA',
-  WIDGET_OUTLINE_COLOR: '#AAA',
-  WIDGET_TEXT_COLOR: '#333',
-  LINK_COLOR: '#2a2',
-  EVENT_LINK_COLOR: '#A86',
-  CANVAS_BACKGROUND_COLOR: '#EAEAEA',
-}
-
-const SOLARIZED = {
-  NODE_DEFAULT_BGCOLOR: '#073642',
-  NODE_DEFAULT_COLOR: '#002b36',
-  NODE_TITLE_COLOR: '#93a1a1',
-  NODE_TEXT_COLOR: '#eee8d5',
-  WIDGET_BGCOLOR: '#002b36',
-  WIDGET_TEXT_COLOR: '#eee8d5',
-  LINK_COLOR: '#b58900',
-  CANVAS_BACKGROUND_COLOR: '#002b36',
-}
-
-function buildSampleGraph(graph) {
-  const node_const = LiteGraph.createNode('basic/const')
-  node_const.pos = [80, 100]
-  graph.add(node_const)
-  node_const.setValue(4.5)
-
-  const node_watch = LiteGraph.createNode('basic/watch')
-  node_watch.pos = [340, 100]
-  graph.add(node_watch)
-
-  node_const.connect(0, node_watch, 0)
-}
-
-function App() {
-  const [theme, setTheme] = useState('dark')
-  const activeTheme = theme === 'dark' ? DARK : LIGHT
-
-  const onLoad = useCallback((graph) => {
-    buildSampleGraph(graph)
-    graph.start()
-  }, [])
-
-  // Page chrome only - the graph itself is themed through the prop above.
-  useEffect(() => {
-    document.body.style.backgroundColor = theme === 'dark' ? '#222' : '#FFF'
-    document.body.style.color = theme === 'dark' ? '#DDD' : '#333'
-  }, [theme])
-
-  return (
-    <>
-      <h1>LiteGraph + React</h1>
-      <div className="card">
-        <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-          Toggle theme ({theme})
-        </button>
-        <p>
-          Both canvases are mounted at once. Toggling only re-themes the left one -
-          proof that theming is per-instance and no longer a global mutation.
-        </p>
-      </div>
-
-      <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap' }}>
-        <figure style={{ margin: 0 }}>
-          <figcaption>theme prop: {theme}</figcaption>
-          <div style={{ width: '520px', height: '380px', border: '1px solid #888' }}>
-            <LiteGraphCanvas onLoad={onLoad} theme={activeTheme} width={520} height={380} />
-          </div>
-        </figure>
-
-        <figure style={{ margin: 0 }}>
-          <figcaption>theme from provider: solarized (fixed)</figcaption>
-          <LiteGraphThemeProvider theme={SOLARIZED}>
-            <div style={{ width: '520px', height: '380px', border: '1px solid #888' }}>
-              <LiteGraphCanvas onLoad={onLoad} width={520} height={380} />
-            </div>
-          </LiteGraphThemeProvider>
-        </figure>
-      </div>
-    </>
-  )
-}
-
-export default App

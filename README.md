@@ -156,7 +156,26 @@ function App() {
 }
 ```
 
-Check the `react-demo` folder for a complete example using Vite.
+Themes are per canvas. Pass a `theme` prop, or wrap a subtree in
+`LiteGraphThemeProvider`, and nothing on the `LiteGraph` global is mutated - two
+canvases can render the same graph in different skins at the same time.
+
+### The bench demo
+
+`react-demo` is a full node editor built on the wrapper: a searchable palette of
+every registered node type, drag-and-drop placement, a live inspector, six example
+patches, six custom nodes, JSON import/export, and a split view that renders one
+running graph through two themes at once.
+
+![The bench](imgs/react-bench.png)
+
+```sh
+make demo        # installs dependencies and starts the dev server
+make demo-test   # its test suite
+```
+
+See [react-demo/README.md](react-demo/README.md) for a map of which file
+demonstrates what.
 
 
 ## Projects using it
