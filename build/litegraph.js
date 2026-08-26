@@ -46,6 +46,8 @@
         EVENT_LINK_COLOR: "#A86",
         CONNECTING_LINK_COLOR: "#AFA",
 
+        CANVAS_BACKGROUND_COLOR: "#222",
+
         MAX_NUMBER_OF_NODES: 1000, //avoid infinite loops
         DEFAULT_POSITION: [100, 100], //default node position
         VALID_SHAPES: ["default", "box", "round", "card"], //,"circle"
@@ -5309,6 +5311,135 @@ LGraphNode.prototype.executeAction = function(action)
     };
 
     //*********************************************************************************
+    // Theme: per-canvas appearance configuration
+    //*********************************************************************************
+
+    /**
+     * Appearance settings that are only consulted while painting, and can therefore
+     * differ per LGraphCanvas without desynchronising the shared graph model.
+     *
+     * Layout constants (NODE_TITLE_HEIGHT, NODE_SLOT_HEIGHT, NODE_WIDTH, ...) are
+     * deliberately NOT themeable: they feed LGraphNode.getBounding()/getConnectionPos(),
+     * whose results are cached on the node and shared by every canvas rendering that
+     * graph. Making them per-canvas would desynchronise hit-testing from rendering.
+     *
+     * @property THEME_KEYS
+     */
+    LiteGraph.THEME_KEYS = [
+        "NODE_TITLE_COLOR",
+        "NODE_SELECTED_TITLE_COLOR",
+        "NODE_TEXT_COLOR",
+        "NODE_DEFAULT_COLOR",
+        "NODE_DEFAULT_BGCOLOR",
+        "NODE_DEFAULT_BOXCOLOR",
+        "NODE_BOX_OUTLINE_COLOR",
+        "DEFAULT_SHADOW_COLOR",
+        "WIDGET_BGCOLOR",
+        "WIDGET_OUTLINE_COLOR",
+        "WIDGET_TEXT_COLOR",
+        "WIDGET_SECONDARY_TEXT_COLOR",
+        "LINK_COLOR",
+        "EVENT_LINK_COLOR",
+        "CONNECTING_LINK_COLOR",
+        "CANVAS_BACKGROUND_COLOR",
+        "NODE_TEXT_SIZE",
+        "NODE_SUBTEXT_SIZE",
+        "DEFAULT_GROUP_FONT"
+    ];
+
+    /**
+     * Builds a theme object. Reading a key returns the instance override when one is
+     * set, otherwise the current value of the matching LiteGraph global - looked up
+     * lazily, so existing code that mutates `LiteGraph.NODE_DEFAULT_BGCOLOR` still
+     * changes the default for every canvas that has not overridden it.
+     *
+     * @method createTheme
+     * @param {Object} [overrides] initial per-instance values
+     * @return {Object} theme object; assigning to a key sets an instance override
+     */
+    LiteGraph.createTheme = function(overrides) {
+        var values = {};
+        var theme = {};
+
+        LiteGraph.THEME_KEYS.forEach(function(key) {
+            Object.defineProperty(theme, key, {
+                enumerable: true,
+                configurable: true,
+                get: function() {
+                    return values[key] !== undefined ? values[key] : LiteGraph[key];
+                },
+                set: function(v) {
+                    if (v === undefined || v === null) {
+                        delete values[key];
+                    } else {
+                        values[key] = v;
+                    }
+                }
+            });
+        });
+
+        //non-enumerable helpers so that {...theme} stays a plain value snapshot
+        Object.defineProperty(theme, "assign", {
+            value: function(obj) {
+                if (!obj) {
+                    return theme;
+                }
+                for (var key in obj) {
+                    if (LiteGraph.THEME_KEYS.indexOf(key) === -1) {
+                        console.warn("LiteGraph theme: unknown key '" + key + "'");
+                        continue;
+                    }
+                    theme[key] = obj[key];
+                }
+                return theme;
+            }
+        });
+
+        Object.defineProperty(theme, "reset", {
+            value: function() {
+                values = {};
+                return theme;
+            }
+        });
+
+        Object.defineProperty(theme, "overrides", {
+            get: function() {
+                var out = {};
+                for (var key in values) {
+                    out[key] = values[key];
+                }
+                return out;
+            }
+        });
+
+        return theme.assign(overrides);
+    };
+
+    /**
+     * Defines `target[prop]` as an accessor that tracks `theme[key]` until something
+     * assigns to it directly, at which point the assigned value wins. Used to keep
+     * long-standing public fields such as `canvas.default_link_color` writable while
+     * making them follow the theme when they are left alone.
+     */
+    function _themedProperty(target, prop, theme, key, transform) {
+        var override;
+        Object.defineProperty(target, prop, {
+            enumerable: true,
+            configurable: true,
+            get: function() {
+                if (override !== undefined) {
+                    return override;
+                }
+                var value = theme[key];
+                return transform ? transform(value) : value;
+            },
+            set: function(v) {
+                override = v;
+            }
+        });
+    }
+
+    //*********************************************************************************
     // LGraphCanvas: LGraph renderer CLASS
     //*********************************************************************************
 
@@ -5336,11 +5467,27 @@ LGraphNode.prototype.executeAction = function(action)
         this.ds = new DragAndScale();
         this.zoom_modify_alpha = true; //otherwise it generates ugly patterns when scaling down too much
 
-        this.title_text_font = "" + LiteGraph.NODE_TEXT_SIZE + "px Arial";
-        this.inner_text_font =
-            "normal " + LiteGraph.NODE_SUBTEXT_SIZE + "px Arial";
-        this.node_title_color = LiteGraph.NODE_TITLE_COLOR;
-        this.default_link_color = LiteGraph.LINK_COLOR;
+        //per-instance appearance config; falls back to the LiteGraph globals per key
+        this.theme = LiteGraph.createTheme(options.theme);
+
+        //these stay writable for backwards compatibility, but when left untouched they
+        //track the theme (and therefore the globals) instead of snapshotting at
+        //construction time the way they used to
+        _themedProperty(this, "title_text_font", this.theme, "NODE_TEXT_SIZE", function(v) {
+            return "" + v + "px Arial";
+        });
+        _themedProperty(this, "inner_text_font", this.theme, "NODE_SUBTEXT_SIZE", function(v) {
+            return "normal " + v + "px Arial";
+        });
+        _themedProperty(this, "node_title_color", this.theme, "NODE_TITLE_COLOR");
+        _themedProperty(this, "default_link_color", this.theme, "LINK_COLOR");
+        _themedProperty(this, "clear_background_color", this.theme, "CANVAS_BACKGROUND_COLOR");
+
+        //Inherit from the static map rather than copying it, so node packs that register
+        //a colour later (gltextures.js does) still reach canvases that already exist,
+        //while a write here only ever shadows the entry for this canvas.
+        this.link_type_colors = Object.create(LGraphCanvas.link_type_colors);
+        _themedProperty(this.link_type_colors, "-1", this.theme, "EVENT_LINK_COLOR");
         this.default_connection_color = {
             input_off: "#778",
             input_on: "#7F7", //"#BBD"
@@ -5363,7 +5510,8 @@ LGraphNode.prototype.executeAction = function(action)
         this.editor_alpha = 1; //used for transition
         this.pause_rendering = false;
         this.clear_background = true;
-        this.clear_background_color = "#222";
+        //clear_background_color is defined above as a themed accessor
+        //(theme.CANVAS_BACKGROUND_COLOR); assigning to it still works and wins.
 
 		this.read_only = false; //if set to true users cannot modify the graph
         this.render_only_selected = true;
@@ -5857,6 +6005,32 @@ LGraphNode.prototype.executeAction = function(action)
         if (bgcanvas) {
             this.dirty_bgcanvas = true;
         }
+    };
+
+    /**
+     * Applies appearance overrides to this canvas only and schedules a redraw.
+     * Keys must be listed in LiteGraph.THEME_KEYS; passing null for a key drops the
+     * override so it falls back to the LiteGraph global again.
+     *
+     * @method setTheme
+     * @param {Object} theme e.g. { NODE_DEFAULT_BGCOLOR: "#FFF", LINK_COLOR: "#2a2" }
+     */
+    LGraphCanvas.prototype.setTheme = function(theme) {
+        this.theme.assign(theme);
+        this.setDirty(true, true);
+        return this.theme;
+    };
+
+    /**
+     * Drops every per-instance appearance override, so this canvas follows the
+     * LiteGraph globals again, and schedules a redraw.
+     *
+     * @method resetTheme
+     */
+    LGraphCanvas.prototype.resetTheme = function() {
+        this.theme.reset();
+        this.setDirty(true, true);
+        return this.theme;
     };
 
     /**
@@ -7961,10 +8135,10 @@ LGraphNode.prototype.executeAction = function(action)
                 
                 switch (connType) {
                     case LiteGraph.EVENT:
-                        link_color = LiteGraph.EVENT_LINK_COLOR;
+                        link_color = this.theme.EVENT_LINK_COLOR;
                         break;
                     default:
-                        link_color = LiteGraph.CONNECTING_LINK_COLOR;
+                        link_color = this.theme.CONNECTING_LINK_COLOR;
                 }
 
                 //the connection being dragged by the mouse
@@ -8268,9 +8442,9 @@ LGraphNode.prototype.executeAction = function(action)
 	LGraphCanvas.prototype.drawButton = function( x,y,w,h, text, bgcolor, hovercolor, textcolor )
 	{
 		var ctx = this.ctx;
-		bgcolor = bgcolor || LiteGraph.NODE_DEFAULT_COLOR;
+		bgcolor = bgcolor || this.theme.NODE_DEFAULT_COLOR;
 		hovercolor = hovercolor || "#555";
-		textcolor = textcolor || LiteGraph.NODE_TEXT_COLOR;
+		textcolor = textcolor || this.theme.NODE_TEXT_COLOR;
 		var pos = this.ds.convertOffsetToCanvas(this.graph_mouse);
 		var hover = LiteGraph.isInsideRectangle( pos[0], pos[1], x,y,w,h );
 		pos = this.last_click_position ? [this.last_click_position[0], this.last_click_position[1]] : null;
@@ -8540,8 +8714,8 @@ LGraphNode.prototype.executeAction = function(action)
         var glow = false;
         this.current_node = node;
 
-        var color = node.color || node.constructor.color || LiteGraph.NODE_DEFAULT_COLOR;
-        var bgcolor = node.bgcolor || node.constructor.bgcolor || LiteGraph.NODE_DEFAULT_BGCOLOR;
+        var color = node.color || node.constructor.color || this.theme.NODE_DEFAULT_COLOR;
+        var bgcolor = node.bgcolor || node.constructor.bgcolor || this.theme.NODE_DEFAULT_BGCOLOR;
 
         //shadow and glow
         if (node.mouseOver) {
@@ -8565,7 +8739,7 @@ LGraphNode.prototype.executeAction = function(action)
         ctx.globalAlpha = editor_alpha;
 
         if (this.render_shadows && !low_quality) {
-            ctx.shadowColor = LiteGraph.DEFAULT_SHADOW_COLOR;
+            ctx.shadowColor = this.theme.DEFAULT_SHADOW_COLOR;
             ctx.shadowOffsetX = 2 * this.ds.scale;
             ctx.shadowOffsetY = 2 * this.ds.scale;
             ctx.shadowBlur = 3 * this.ds.scale;
@@ -8743,7 +8917,7 @@ LGraphNode.prototype.executeAction = function(action)
                     if (render_text) {
                         var text = slot.label != null ? slot.label : slot.name;
                         if (text) {
-                            ctx.fillStyle = LiteGraph.NODE_TEXT_COLOR;
+                            ctx.fillStyle = this.theme.NODE_TEXT_COLOR;
                             if (horizontal || slot.dir == LiteGraph.UP) {
                                 ctx.fillText(text, pos[0], pos[1] - 10);
                             } else {
@@ -8850,7 +9024,7 @@ LGraphNode.prototype.executeAction = function(action)
                     if (render_text) {
                         var text = slot.label != null ? slot.label : slot.name;
                         if (text) {
-                            ctx.fillStyle = LiteGraph.NODE_TEXT_COLOR;
+                            ctx.fillStyle = this.theme.NODE_TEXT_COLOR;
                             if (horizontal || slot.dir == LiteGraph.DOWN) {
                                 ctx.fillText(text, pos[0], pos[1] - 8);
                             } else {
@@ -9118,7 +9292,7 @@ LGraphNode.prototype.executeAction = function(action)
                 var title_color = node.constructor.title_color || fgcolor;
 
                 if (node.flags.collapsed) {
-                    ctx.shadowColor = LiteGraph.DEFAULT_SHADOW_COLOR;
+                    ctx.shadowColor = this.theme.DEFAULT_SHADOW_COLOR;
                 }
 
                 //* gradient test
@@ -9183,7 +9357,7 @@ LGraphNode.prototype.executeAction = function(action)
                     ctx.fill();
                 }
                 
-                ctx.fillStyle = node.boxcolor || colState || LiteGraph.NODE_DEFAULT_BOXCOLOR;
+                ctx.fillStyle = node.boxcolor || colState || this.theme.NODE_DEFAULT_BOXCOLOR;
 				if(low_quality)
 					ctx.fillRect( title_height * 0.5 - box_size *0.5, title_height * -0.5 - box_size *0.5, box_size , box_size  );
 				else
@@ -9208,7 +9382,7 @@ LGraphNode.prototype.executeAction = function(action)
                         box_size + 2
                     );
                 }
-                ctx.fillStyle = node.boxcolor || colState || LiteGraph.NODE_DEFAULT_BOXCOLOR;
+                ctx.fillStyle = node.boxcolor || colState || this.theme.NODE_DEFAULT_BOXCOLOR;
                 ctx.fillRect(
                     (title_height - box_size) * 0.5,
                     (title_height + box_size) * -0.5,
@@ -9234,7 +9408,7 @@ LGraphNode.prototype.executeAction = function(action)
                 var title = String(node.getTitle());
                 if (title) {
                     if (selected) {
-                        ctx.fillStyle = LiteGraph.NODE_SELECTED_TITLE_COLOR;
+                        ctx.fillStyle = this.theme.NODE_SELECTED_TITLE_COLOR;
                     } else {
                         ctx.fillStyle =
                             node.constructor.title_text_color ||
@@ -9336,7 +9510,7 @@ LGraphNode.prototype.executeAction = function(action)
                     Math.PI * 2
                 );
             }
-            ctx.strokeStyle = LiteGraph.NODE_BOX_OUTLINE_COLOR;
+            ctx.strokeStyle = this.theme.NODE_BOX_OUTLINE_COLOR;
             ctx.stroke();
             ctx.strokeStyle = fgcolor;
             ctx.globalAlpha = 1;
@@ -9509,7 +9683,7 @@ LGraphNode.prototype.executeAction = function(action)
 
         //choose color
         if (!color && link) {
-            color = link.color || LGraphCanvas.link_type_colors[link.type];
+            color = link.color || this.link_type_colors[link.type];
         }
         if (!color) {
             color = this.default_link_color;
@@ -9876,10 +10050,10 @@ LGraphNode.prototype.executeAction = function(action)
         var show_text = this.ds.scale > 0.5;
         ctx.save();
         ctx.globalAlpha = this.editor_alpha;
-        var outline_color = LiteGraph.WIDGET_OUTLINE_COLOR;
-        var background_color = LiteGraph.WIDGET_BGCOLOR;
-        var text_color = LiteGraph.WIDGET_TEXT_COLOR;
-		var secondary_text_color = LiteGraph.WIDGET_SECONDARY_TEXT_COLOR;
+        var outline_color = this.theme.WIDGET_OUTLINE_COLOR;
+        var background_color = this.theme.WIDGET_BGCOLOR;
+        var text_color = this.theme.WIDGET_TEXT_COLOR;
+		var secondary_text_color = this.theme.WIDGET_SECONDARY_TEXT_COLOR;
         var margin = 15;
 
         for (var i = 0; i < widgets.length; ++i) {

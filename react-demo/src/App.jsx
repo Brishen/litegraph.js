@@ -1,97 +1,111 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
-import { LiteGraphCanvas } from '../../src/litegraph-react.mjs'
+import { useState, useCallback, useEffect } from 'react'
+import { LiteGraphCanvas, LiteGraphThemeProvider } from '../../src/litegraph-react.mjs'
 import { LiteGraph } from '../../src/litegraph.mjs'
 import '../../src/nodes/base.js'
 import '../../css/litegraph.css'
 
+// Themes are plain objects handed to a canvas as a prop. Nothing here mutates the
+// LiteGraph globals, so two canvases can be themed differently at the same time.
+const DARK = {
+  NODE_DEFAULT_BGCOLOR: '#353535',
+  NODE_DEFAULT_COLOR: '#333',
+  NODE_TITLE_COLOR: '#999',
+  NODE_SELECTED_TITLE_COLOR: '#FFF',
+  NODE_TEXT_COLOR: '#AAA',
+  NODE_BOX_OUTLINE_COLOR: '#FFF',
+  DEFAULT_SHADOW_COLOR: 'rgba(0,0,0,0.5)',
+  WIDGET_BGCOLOR: '#222',
+  WIDGET_OUTLINE_COLOR: '#666',
+  WIDGET_TEXT_COLOR: '#DDD',
+  LINK_COLOR: '#9A9',
+  EVENT_LINK_COLOR: '#A86',
+  CANVAS_BACKGROUND_COLOR: '#222',
+}
+
+const LIGHT = {
+  NODE_DEFAULT_BGCOLOR: '#FFF',
+  NODE_DEFAULT_COLOR: '#EEE',
+  NODE_TITLE_COLOR: '#000',
+  NODE_SELECTED_TITLE_COLOR: '#000',
+  NODE_TEXT_COLOR: '#333',
+  NODE_BOX_OUTLINE_COLOR: '#000',
+  DEFAULT_SHADOW_COLOR: 'rgba(0,0,0,0.2)',
+  WIDGET_BGCOLOR: '#EAEAEA',
+  WIDGET_OUTLINE_COLOR: '#AAA',
+  WIDGET_TEXT_COLOR: '#333',
+  LINK_COLOR: '#2a2',
+  EVENT_LINK_COLOR: '#A86',
+  CANVAS_BACKGROUND_COLOR: '#EAEAEA',
+}
+
+const SOLARIZED = {
+  NODE_DEFAULT_BGCOLOR: '#073642',
+  NODE_DEFAULT_COLOR: '#002b36',
+  NODE_TITLE_COLOR: '#93a1a1',
+  NODE_TEXT_COLOR: '#eee8d5',
+  WIDGET_BGCOLOR: '#002b36',
+  WIDGET_TEXT_COLOR: '#eee8d5',
+  LINK_COLOR: '#b58900',
+  CANVAS_BACKGROUND_COLOR: '#002b36',
+}
+
+function buildSampleGraph(graph) {
+  const node_const = LiteGraph.createNode('basic/const')
+  node_const.pos = [80, 100]
+  graph.add(node_const)
+  node_const.setValue(4.5)
+
+  const node_watch = LiteGraph.createNode('basic/watch')
+  node_watch.pos = [340, 100]
+  graph.add(node_watch)
+
+  node_const.connect(0, node_watch, 0)
+}
+
 function App() {
-  const [count, setCount] = useState(0)
   const [theme, setTheme] = useState('dark')
-  const canvasRef = useRef(null)
+  const activeTheme = theme === 'dark' ? DARK : LIGHT
 
-  const onLoad = useCallback((graph, canvas) => {
-    canvasRef.current = canvas;
+  const onLoad = useCallback((graph) => {
+    buildSampleGraph(graph)
+    graph.start()
+  }, [])
 
-    // This function is called when the graph is loaded
-    console.log("Graph loaded", graph, canvas);
-
-    // Create a node
-    var node_const = LiteGraph.createNode("basic/const");
-    node_const.pos = [200, 200];
-    graph.add(node_const);
-    node_const.setValue(4.5);
-
-    var node_watch = LiteGraph.createNode("basic/watch");
-    node_watch.pos = [700, 200];
-    graph.add(node_watch);
-
-    node_const.connect(0, node_watch, 0);
-
-    // Auto-arrange or just let it start
-    graph.start();
-  }, []);
-
+  // Page chrome only - the graph itself is themed through the prop above.
   useEffect(() => {
-    if (theme === 'light') {
-        LiteGraph.NODE_DEFAULT_BGCOLOR = "#FFF";
-        LiteGraph.NODE_DEFAULT_COLOR = "#EEE";
-        LiteGraph.NODE_TITLE_COLOR = "#000";
-        LiteGraph.NODE_SELECTED_TITLE_COLOR = "#000";
-        LiteGraph.NODE_TEXT_COLOR = "#333";
-        LiteGraph.NODE_BOX_OUTLINE_COLOR = "#000";
-        LiteGraph.DEFAULT_SHADOW_COLOR = "rgba(0,0,0,0.2)";
-        LiteGraph.WIDGET_BGCOLOR = "#EAEAEA";
-        LiteGraph.WIDGET_OUTLINE_COLOR = "#AAA";
-        LiteGraph.WIDGET_TEXT_COLOR = "#333";
-        LiteGraph.LINK_COLOR = "#2a2";
-        LiteGraph.EVENT_LINK_COLOR = "#A86";
-        document.body.style.backgroundColor = "#FFF";
-        document.body.style.color = "#333";
-        if (canvasRef.current) {
-            canvasRef.current.clear_background_color = "#EAEAEA";
-        }
-    } else {
-        LiteGraph.NODE_DEFAULT_BGCOLOR = "#353535";
-        LiteGraph.NODE_DEFAULT_COLOR = "#333";
-        LiteGraph.NODE_TITLE_COLOR = "#999";
-        LiteGraph.NODE_SELECTED_TITLE_COLOR = "#FFF";
-        LiteGraph.NODE_TEXT_COLOR = "#AAA";
-        LiteGraph.NODE_BOX_OUTLINE_COLOR = "#FFF";
-        LiteGraph.DEFAULT_SHADOW_COLOR = "rgba(0,0,0,0.5)";
-        LiteGraph.WIDGET_BGCOLOR = "#222";
-        LiteGraph.WIDGET_OUTLINE_COLOR = "#666";
-        LiteGraph.WIDGET_TEXT_COLOR = "#DDD";
-        LiteGraph.LINK_COLOR = "#9A9";
-        LiteGraph.EVENT_LINK_COLOR = "#A86";
-        document.body.style.backgroundColor = "#222";
-        document.body.style.color = "#DDD";
-        if (canvasRef.current) {
-            canvasRef.current.clear_background_color = "#222";
-        }
-    }
-
-    if (canvasRef.current) {
-        canvasRef.current.draw(true, true);
-    }
-  }, [theme]);
+    document.body.style.backgroundColor = theme === 'dark' ? '#222' : '#FFF'
+    document.body.style.color = theme === 'dark' ? '#DDD' : '#333'
+  }, [theme])
 
   return (
     <>
       <h1>LiteGraph + React</h1>
       <div className="card">
         <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-            Toggle Theme ({theme})
+          Toggle theme ({theme})
         </button>
         <p>
-          Edit <code>src/App.jsx</code> and save to test HMR.
+          Both canvases are mounted at once. Toggling only re-themes the left one -
+          proof that theming is per-instance and no longer a global mutation.
         </p>
       </div>
-      <div style={{ width: '800px', height: '600px', border: '1px solid #ccc', margin: 'auto' }}>
-        <LiteGraphCanvas
-            onLoad={onLoad}
-            width={800}
-            height={600}
-        />
+
+      <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', flexWrap: 'wrap' }}>
+        <figure style={{ margin: 0 }}>
+          <figcaption>theme prop: {theme}</figcaption>
+          <div style={{ width: '520px', height: '380px', border: '1px solid #888' }}>
+            <LiteGraphCanvas onLoad={onLoad} theme={activeTheme} width={520} height={380} />
+          </div>
+        </figure>
+
+        <figure style={{ margin: 0 }}>
+          <figcaption>theme from provider: solarized (fixed)</figcaption>
+          <LiteGraphThemeProvider theme={SOLARIZED}>
+            <div style={{ width: '520px', height: '380px', border: '1px solid #888' }}>
+              <LiteGraphCanvas onLoad={onLoad} width={520} height={380} />
+            </div>
+          </LiteGraphThemeProvider>
+        </figure>
       </div>
     </>
   )

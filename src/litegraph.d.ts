@@ -170,6 +170,15 @@ export const LiteGraph: {
     LINK_COLOR: string;
     EVENT_LINK_COLOR: string;
     CONNECTING_LINK_COLOR: string;
+    CANVAS_BACKGROUND_COLOR: string;
+
+    /** Keys that may be overridden per LGraphCanvas via its theme. */
+    THEME_KEYS: Array<keyof LGraphCanvasThemeValues>;
+    /**
+     * Builds a theme object whose keys fall back to the matching LiteGraph global
+     * whenever no instance override is set.
+     */
+    createTheme(overrides?: Partial<LGraphCanvasThemeValues>): LGraphCanvasTheme;
 
     MAX_NUMBER_OF_NODES: number; //avoid infinite loops
     DEFAULT_POSITION: Vector2; //default node position
@@ -1093,6 +1102,38 @@ export declare class DragAndScale {
  * @param graph
  * @param options { skip_rendering, autoresize }
  */
+/** Appearance settings that are consulted only while painting. */
+export interface LGraphCanvasThemeValues {
+    NODE_TITLE_COLOR: string;
+    NODE_SELECTED_TITLE_COLOR: string;
+    NODE_TEXT_COLOR: string;
+    NODE_DEFAULT_COLOR: string;
+    NODE_DEFAULT_BGCOLOR: string;
+    NODE_DEFAULT_BOXCOLOR: string;
+    NODE_BOX_OUTLINE_COLOR: string;
+    DEFAULT_SHADOW_COLOR: string;
+    WIDGET_BGCOLOR: string;
+    WIDGET_OUTLINE_COLOR: string;
+    WIDGET_TEXT_COLOR: string;
+    WIDGET_SECONDARY_TEXT_COLOR: string;
+    LINK_COLOR: string;
+    EVENT_LINK_COLOR: string;
+    CONNECTING_LINK_COLOR: string;
+    CANVAS_BACKGROUND_COLOR: string;
+    NODE_TEXT_SIZE: number;
+    NODE_SUBTEXT_SIZE: number;
+    DEFAULT_GROUP_FONT: number;
+}
+
+export interface LGraphCanvasTheme extends LGraphCanvasThemeValues {
+    /** Applies overrides in place; unknown keys are warned about and ignored. */
+    assign(values: Partial<LGraphCanvasThemeValues>): LGraphCanvasTheme;
+    /** Removes every override so each key falls back to its LiteGraph global. */
+    reset(): LGraphCanvasTheme;
+    /** The explicit overrides only, without the inherited globals. */
+    readonly overrides: Partial<LGraphCanvasThemeValues>;
+}
+
 export declare class LGraphCanvas {
     static node_colors: Record<
         string,
@@ -1139,7 +1180,11 @@ export declare class LGraphCanvas {
         graph?: LGraph,
         options?: {
             skip_render?: boolean;
+            skip_events?: boolean;
             autoresize?: boolean;
+            viewport?: Vector4 | null;
+            /** Appearance overrides for this canvas only. */
+            theme?: Partial<LGraphCanvasThemeValues>;
         }
     );
 
@@ -1174,6 +1219,17 @@ export declare class LGraphCanvas {
         output_on: string;
     };
     default_link_color: string;
+    /**
+     * Per-canvas appearance overrides. Reading a key returns the instance override
+     * when set, otherwise the current `LiteGraph.*` global.
+     */
+    theme: LGraphCanvasTheme;
+    /** Applies appearance overrides to this canvas only and schedules a redraw. */
+    setTheme(theme: Partial<LGraphCanvasThemeValues>): LGraphCanvasTheme;
+    /** Drops every per-instance override so this canvas follows the globals again. */
+    resetTheme(): LGraphCanvasTheme;
+    /** Link colours by slot type for this canvas; inherits from LGraphCanvas.link_type_colors. */
+    link_type_colors: Record<string, string>;
     dirty_area: Vector4 | null;
     dirty_bgcanvas?: boolean;
     dirty_canvas?: boolean;
