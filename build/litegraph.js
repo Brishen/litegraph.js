@@ -1,5 +1,3 @@
-//packer version
-
 
 (function(global) {
     // *************************************************************
@@ -47,6 +45,8 @@
         LINK_COLOR: "#9A9",
         EVENT_LINK_COLOR: "#A86",
         CONNECTING_LINK_COLOR: "#AFA",
+
+        CANVAS_BACKGROUND_COLOR: "#222",
 
         MAX_NUMBER_OF_NODES: 1000, //avoid infinite loops
         DEFAULT_POSITION: [100, 100], //default node position
@@ -5311,6 +5311,135 @@ LGraphNode.prototype.executeAction = function(action)
     };
 
     //*********************************************************************************
+    // Theme: per-canvas appearance configuration
+    //*********************************************************************************
+
+    /**
+     * Appearance settings that are only consulted while painting, and can therefore
+     * differ per LGraphCanvas without desynchronising the shared graph model.
+     *
+     * Layout constants (NODE_TITLE_HEIGHT, NODE_SLOT_HEIGHT, NODE_WIDTH, ...) are
+     * deliberately NOT themeable: they feed LGraphNode.getBounding()/getConnectionPos(),
+     * whose results are cached on the node and shared by every canvas rendering that
+     * graph. Making them per-canvas would desynchronise hit-testing from rendering.
+     *
+     * @property THEME_KEYS
+     */
+    LiteGraph.THEME_KEYS = [
+        "NODE_TITLE_COLOR",
+        "NODE_SELECTED_TITLE_COLOR",
+        "NODE_TEXT_COLOR",
+        "NODE_DEFAULT_COLOR",
+        "NODE_DEFAULT_BGCOLOR",
+        "NODE_DEFAULT_BOXCOLOR",
+        "NODE_BOX_OUTLINE_COLOR",
+        "DEFAULT_SHADOW_COLOR",
+        "WIDGET_BGCOLOR",
+        "WIDGET_OUTLINE_COLOR",
+        "WIDGET_TEXT_COLOR",
+        "WIDGET_SECONDARY_TEXT_COLOR",
+        "LINK_COLOR",
+        "EVENT_LINK_COLOR",
+        "CONNECTING_LINK_COLOR",
+        "CANVAS_BACKGROUND_COLOR",
+        "NODE_TEXT_SIZE",
+        "NODE_SUBTEXT_SIZE",
+        "DEFAULT_GROUP_FONT"
+    ];
+
+    /**
+     * Builds a theme object. Reading a key returns the instance override when one is
+     * set, otherwise the current value of the matching LiteGraph global - looked up
+     * lazily, so existing code that mutates `LiteGraph.NODE_DEFAULT_BGCOLOR` still
+     * changes the default for every canvas that has not overridden it.
+     *
+     * @method createTheme
+     * @param {Object} [overrides] initial per-instance values
+     * @return {Object} theme object; assigning to a key sets an instance override
+     */
+    LiteGraph.createTheme = function(overrides) {
+        var values = {};
+        var theme = {};
+
+        LiteGraph.THEME_KEYS.forEach(function(key) {
+            Object.defineProperty(theme, key, {
+                enumerable: true,
+                configurable: true,
+                get: function() {
+                    return values[key] !== undefined ? values[key] : LiteGraph[key];
+                },
+                set: function(v) {
+                    if (v === undefined || v === null) {
+                        delete values[key];
+                    } else {
+                        values[key] = v;
+                    }
+                }
+            });
+        });
+
+        //non-enumerable helpers so that {...theme} stays a plain value snapshot
+        Object.defineProperty(theme, "assign", {
+            value: function(obj) {
+                if (!obj) {
+                    return theme;
+                }
+                for (var key in obj) {
+                    if (LiteGraph.THEME_KEYS.indexOf(key) === -1) {
+                        console.warn("LiteGraph theme: unknown key '" + key + "'");
+                        continue;
+                    }
+                    theme[key] = obj[key];
+                }
+                return theme;
+            }
+        });
+
+        Object.defineProperty(theme, "reset", {
+            value: function() {
+                values = {};
+                return theme;
+            }
+        });
+
+        Object.defineProperty(theme, "overrides", {
+            get: function() {
+                var out = {};
+                for (var key in values) {
+                    out[key] = values[key];
+                }
+                return out;
+            }
+        });
+
+        return theme.assign(overrides);
+    };
+
+    /**
+     * Defines `target[prop]` as an accessor that tracks `theme[key]` until something
+     * assigns to it directly, at which point the assigned value wins. Used to keep
+     * long-standing public fields such as `canvas.default_link_color` writable while
+     * making them follow the theme when they are left alone.
+     */
+    function _themedProperty(target, prop, theme, key, transform) {
+        var override;
+        Object.defineProperty(target, prop, {
+            enumerable: true,
+            configurable: true,
+            get: function() {
+                if (override !== undefined) {
+                    return override;
+                }
+                var value = theme[key];
+                return transform ? transform(value) : value;
+            },
+            set: function(v) {
+                override = v;
+            }
+        });
+    }
+
+    //*********************************************************************************
     // LGraphCanvas: LGraph renderer CLASS
     //*********************************************************************************
 
@@ -5338,11 +5467,27 @@ LGraphNode.prototype.executeAction = function(action)
         this.ds = new DragAndScale();
         this.zoom_modify_alpha = true; //otherwise it generates ugly patterns when scaling down too much
 
-        this.title_text_font = "" + LiteGraph.NODE_TEXT_SIZE + "px Arial";
-        this.inner_text_font =
-            "normal " + LiteGraph.NODE_SUBTEXT_SIZE + "px Arial";
-        this.node_title_color = LiteGraph.NODE_TITLE_COLOR;
-        this.default_link_color = LiteGraph.LINK_COLOR;
+        //per-instance appearance config; falls back to the LiteGraph globals per key
+        this.theme = LiteGraph.createTheme(options.theme);
+
+        //these stay writable for backwards compatibility, but when left untouched they
+        //track the theme (and therefore the globals) instead of snapshotting at
+        //construction time the way they used to
+        _themedProperty(this, "title_text_font", this.theme, "NODE_TEXT_SIZE", function(v) {
+            return "" + v + "px Arial";
+        });
+        _themedProperty(this, "inner_text_font", this.theme, "NODE_SUBTEXT_SIZE", function(v) {
+            return "normal " + v + "px Arial";
+        });
+        _themedProperty(this, "node_title_color", this.theme, "NODE_TITLE_COLOR");
+        _themedProperty(this, "default_link_color", this.theme, "LINK_COLOR");
+        _themedProperty(this, "clear_background_color", this.theme, "CANVAS_BACKGROUND_COLOR");
+
+        //Inherit from the static map rather than copying it, so node packs that register
+        //a colour later (gltextures.js does) still reach canvases that already exist,
+        //while a write here only ever shadows the entry for this canvas.
+        this.link_type_colors = Object.create(LGraphCanvas.link_type_colors);
+        _themedProperty(this.link_type_colors, "-1", this.theme, "EVENT_LINK_COLOR");
         this.default_connection_color = {
             input_off: "#778",
             input_on: "#7F7", //"#BBD"
@@ -5365,7 +5510,8 @@ LGraphNode.prototype.executeAction = function(action)
         this.editor_alpha = 1; //used for transition
         this.pause_rendering = false;
         this.clear_background = true;
-        this.clear_background_color = "#222";
+        //clear_background_color is defined above as a themed accessor
+        //(theme.CANVAS_BACKGROUND_COLOR); assigning to it still works and wins.
 
 		this.read_only = false; //if set to true users cannot modify the graph
         this.render_only_selected = true;
@@ -5859,6 +6005,32 @@ LGraphNode.prototype.executeAction = function(action)
         if (bgcanvas) {
             this.dirty_bgcanvas = true;
         }
+    };
+
+    /**
+     * Applies appearance overrides to this canvas only and schedules a redraw.
+     * Keys must be listed in LiteGraph.THEME_KEYS; passing null for a key drops the
+     * override so it falls back to the LiteGraph global again.
+     *
+     * @method setTheme
+     * @param {Object} theme e.g. { NODE_DEFAULT_BGCOLOR: "#FFF", LINK_COLOR: "#2a2" }
+     */
+    LGraphCanvas.prototype.setTheme = function(theme) {
+        this.theme.assign(theme);
+        this.setDirty(true, true);
+        return this.theme;
+    };
+
+    /**
+     * Drops every per-instance appearance override, so this canvas follows the
+     * LiteGraph globals again, and schedules a redraw.
+     *
+     * @method resetTheme
+     */
+    LGraphCanvas.prototype.resetTheme = function() {
+        this.theme.reset();
+        this.setDirty(true, true);
+        return this.theme;
     };
 
     /**
@@ -7963,10 +8135,10 @@ LGraphNode.prototype.executeAction = function(action)
                 
                 switch (connType) {
                     case LiteGraph.EVENT:
-                        link_color = LiteGraph.EVENT_LINK_COLOR;
+                        link_color = this.theme.EVENT_LINK_COLOR;
                         break;
                     default:
-                        link_color = LiteGraph.CONNECTING_LINK_COLOR;
+                        link_color = this.theme.CONNECTING_LINK_COLOR;
                 }
 
                 //the connection being dragged by the mouse
@@ -8270,9 +8442,9 @@ LGraphNode.prototype.executeAction = function(action)
 	LGraphCanvas.prototype.drawButton = function( x,y,w,h, text, bgcolor, hovercolor, textcolor )
 	{
 		var ctx = this.ctx;
-		bgcolor = bgcolor || LiteGraph.NODE_DEFAULT_COLOR;
+		bgcolor = bgcolor || this.theme.NODE_DEFAULT_COLOR;
 		hovercolor = hovercolor || "#555";
-		textcolor = textcolor || LiteGraph.NODE_TEXT_COLOR;
+		textcolor = textcolor || this.theme.NODE_TEXT_COLOR;
 		var pos = this.ds.convertOffsetToCanvas(this.graph_mouse);
 		var hover = LiteGraph.isInsideRectangle( pos[0], pos[1], x,y,w,h );
 		pos = this.last_click_position ? [this.last_click_position[0], this.last_click_position[1]] : null;
@@ -8542,8 +8714,8 @@ LGraphNode.prototype.executeAction = function(action)
         var glow = false;
         this.current_node = node;
 
-        var color = node.color || node.constructor.color || LiteGraph.NODE_DEFAULT_COLOR;
-        var bgcolor = node.bgcolor || node.constructor.bgcolor || LiteGraph.NODE_DEFAULT_BGCOLOR;
+        var color = node.color || node.constructor.color || this.theme.NODE_DEFAULT_COLOR;
+        var bgcolor = node.bgcolor || node.constructor.bgcolor || this.theme.NODE_DEFAULT_BGCOLOR;
 
         //shadow and glow
         if (node.mouseOver) {
@@ -8567,7 +8739,7 @@ LGraphNode.prototype.executeAction = function(action)
         ctx.globalAlpha = editor_alpha;
 
         if (this.render_shadows && !low_quality) {
-            ctx.shadowColor = LiteGraph.DEFAULT_SHADOW_COLOR;
+            ctx.shadowColor = this.theme.DEFAULT_SHADOW_COLOR;
             ctx.shadowOffsetX = 2 * this.ds.scale;
             ctx.shadowOffsetY = 2 * this.ds.scale;
             ctx.shadowBlur = 3 * this.ds.scale;
@@ -8745,7 +8917,7 @@ LGraphNode.prototype.executeAction = function(action)
                     if (render_text) {
                         var text = slot.label != null ? slot.label : slot.name;
                         if (text) {
-                            ctx.fillStyle = LiteGraph.NODE_TEXT_COLOR;
+                            ctx.fillStyle = this.theme.NODE_TEXT_COLOR;
                             if (horizontal || slot.dir == LiteGraph.UP) {
                                 ctx.fillText(text, pos[0], pos[1] - 10);
                             } else {
@@ -8852,7 +9024,7 @@ LGraphNode.prototype.executeAction = function(action)
                     if (render_text) {
                         var text = slot.label != null ? slot.label : slot.name;
                         if (text) {
-                            ctx.fillStyle = LiteGraph.NODE_TEXT_COLOR;
+                            ctx.fillStyle = this.theme.NODE_TEXT_COLOR;
                             if (horizontal || slot.dir == LiteGraph.DOWN) {
                                 ctx.fillText(text, pos[0], pos[1] - 8);
                             } else {
@@ -9120,7 +9292,7 @@ LGraphNode.prototype.executeAction = function(action)
                 var title_color = node.constructor.title_color || fgcolor;
 
                 if (node.flags.collapsed) {
-                    ctx.shadowColor = LiteGraph.DEFAULT_SHADOW_COLOR;
+                    ctx.shadowColor = this.theme.DEFAULT_SHADOW_COLOR;
                 }
 
                 //* gradient test
@@ -9185,7 +9357,7 @@ LGraphNode.prototype.executeAction = function(action)
                     ctx.fill();
                 }
                 
-                ctx.fillStyle = node.boxcolor || colState || LiteGraph.NODE_DEFAULT_BOXCOLOR;
+                ctx.fillStyle = node.boxcolor || colState || this.theme.NODE_DEFAULT_BOXCOLOR;
 				if(low_quality)
 					ctx.fillRect( title_height * 0.5 - box_size *0.5, title_height * -0.5 - box_size *0.5, box_size , box_size  );
 				else
@@ -9210,7 +9382,7 @@ LGraphNode.prototype.executeAction = function(action)
                         box_size + 2
                     );
                 }
-                ctx.fillStyle = node.boxcolor || colState || LiteGraph.NODE_DEFAULT_BOXCOLOR;
+                ctx.fillStyle = node.boxcolor || colState || this.theme.NODE_DEFAULT_BOXCOLOR;
                 ctx.fillRect(
                     (title_height - box_size) * 0.5,
                     (title_height + box_size) * -0.5,
@@ -9236,7 +9408,7 @@ LGraphNode.prototype.executeAction = function(action)
                 var title = String(node.getTitle());
                 if (title) {
                     if (selected) {
-                        ctx.fillStyle = LiteGraph.NODE_SELECTED_TITLE_COLOR;
+                        ctx.fillStyle = this.theme.NODE_SELECTED_TITLE_COLOR;
                     } else {
                         ctx.fillStyle =
                             node.constructor.title_text_color ||
@@ -9338,7 +9510,7 @@ LGraphNode.prototype.executeAction = function(action)
                     Math.PI * 2
                 );
             }
-            ctx.strokeStyle = LiteGraph.NODE_BOX_OUTLINE_COLOR;
+            ctx.strokeStyle = this.theme.NODE_BOX_OUTLINE_COLOR;
             ctx.stroke();
             ctx.strokeStyle = fgcolor;
             ctx.globalAlpha = 1;
@@ -9511,7 +9683,7 @@ LGraphNode.prototype.executeAction = function(action)
 
         //choose color
         if (!color && link) {
-            color = link.color || LGraphCanvas.link_type_colors[link.type];
+            color = link.color || this.link_type_colors[link.type];
         }
         if (!color) {
             color = this.default_link_color;
@@ -9878,10 +10050,10 @@ LGraphNode.prototype.executeAction = function(action)
         var show_text = this.ds.scale > 0.5;
         ctx.save();
         ctx.globalAlpha = this.editor_alpha;
-        var outline_color = LiteGraph.WIDGET_OUTLINE_COLOR;
-        var background_color = LiteGraph.WIDGET_BGCOLOR;
-        var text_color = LiteGraph.WIDGET_TEXT_COLOR;
-		var secondary_text_color = LiteGraph.WIDGET_SECONDARY_TEXT_COLOR;
+        var outline_color = this.theme.WIDGET_OUTLINE_COLOR;
+        var background_color = this.theme.WIDGET_BGCOLOR;
+        var text_color = this.theme.WIDGET_TEXT_COLOR;
+		var secondary_text_color = this.theme.WIDGET_SECONDARY_TEXT_COLOR;
         var margin = 15;
 
         for (var i = 0; i < widgets.length; ++i) {
@@ -14411,17 +14583,23 @@ LGraphNode.prototype.executeAction = function(action)
                 window.setTimeout(callback, 1000 / 60);
             };
     }
-})(this);
+})(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));
 
 if (typeof exports != "undefined") {
-    exports.LiteGraph = this.LiteGraph;
-    exports.LGraph = this.LGraph;
-    exports.LLink = this.LLink;
-    exports.LGraphNode = this.LGraphNode;
-    exports.LGraphGroup = this.LGraphGroup;
-    exports.DragAndScale = this.DragAndScale;
-    exports.LGraphCanvas = this.LGraphCanvas;
-    exports.ContextMenu = this.ContextMenu;
+    //LLink, DragAndScale and ContextMenu are only ever attached to the LiteGraph
+    //namespace, never to the global object, so read the namespace first.
+    var _lg_scope = (typeof window !== "undefined" && window) || (typeof global !== "undefined" && global) || (typeof self !== "undefined" && self) || this;
+    var _lg_ns = _lg_scope && _lg_scope.LiteGraph;
+    if (_lg_ns) {
+        exports.LiteGraph = _lg_ns;
+        exports.LGraph = _lg_ns.LGraph || _lg_scope.LGraph;
+        exports.LLink = _lg_ns.LLink || _lg_scope.LLink;
+        exports.LGraphNode = _lg_ns.LGraphNode || _lg_scope.LGraphNode;
+        exports.LGraphGroup = _lg_ns.LGraphGroup || _lg_scope.LGraphGroup;
+        exports.DragAndScale = _lg_ns.DragAndScale || _lg_scope.DragAndScale;
+        exports.LGraphCanvas = _lg_ns.LGraphCanvas || _lg_scope.LGraphCanvas;
+        exports.ContextMenu = _lg_ns.ContextMenu || _lg_scope.ContextMenu;
+    }
 }
 
 
@@ -14835,7 +15013,7 @@ if (typeof exports != "undefined") {
 			min_x = Math.min( node.pos[0], min_x );
 			max_x = Math.max( node.pos[0], min_x );
 		}
-		
+
 		var last_input_y = 0;
 		var last_output_y = 0;
 
@@ -14916,7 +15094,7 @@ if (typeof exports != "undefined") {
 			name: "",
 			type: "number",
 			value: 0
-		}; 
+		};
 
         var that = this;
 
@@ -15150,7 +15328,7 @@ if (typeof exports != "undefined") {
         else if (name == "value") {
         }
     }
-     
+
     GraphOutput.prototype.updateType = function () {
         var type = this.properties.type;
         if (this.type_widget)
@@ -15451,7 +15629,7 @@ JSONParse.prototype.onAction = function(name) {
 		this.parse();
 }
 
-LiteGraph.registerNodeType("basic/jsonparse", JSONParse);	
+LiteGraph.registerNodeType("basic/jsonparse", JSONParse);
 
 	//to store json objects
     function ConstantData() {
@@ -15801,12 +15979,6 @@ LiteGraph.registerNodeType("basic/jsonparse", JSONParse);
         "number"
     );
 
-    function length(v) {
-        if(v && v.length != null)
-			return Number(v.length);
-		return 0;
-    }
-
     LiteGraph.wrapFunctionAsNode(
         "basic/not",
         function(a){ return !a; },
@@ -16096,8 +16268,8 @@ LiteGraph.registerNodeType("basic/jsonparse", JSONParse);
     };
 
     LiteGraph.registerNodeType("basic/script", NodeScript);
-    
-    
+
+
     function GenericCompare() {
         this.addInput("A", 0);
         this.addInput("B", 0);
@@ -16193,8 +16365,8 @@ LiteGraph.registerNodeType("basic/jsonparse", JSONParse);
     };
 
     LiteGraph.registerNodeType("basic/CompareValues", GenericCompare);
-    
-})(this);
+
+})(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : (typeof self !== "undefined" ? self : this)));
 
 //event related nodes
 (function(global) {
@@ -19820,157 +19992,6 @@ LiteGraph.registerNodeType("events/waitAll", WaitAll);
 
 })(this);
 
-//basic nodes
-(function(global) {
-    var LiteGraph = global.LiteGraph;
-
-    function toString(a) {
-		if(a && a.constructor === Object)
-		{
-			try
-			{
-				return JSON.stringify(a);
-			}
-			catch (err)
-			{
-				return String(a);
-			}
-		}
-        return String(a);
-    }
-
-    LiteGraph.wrapFunctionAsNode("string/toString", toString, [""], "string");
-
-    function compare(a, b) {
-        return a == b;
-    }
-
-    LiteGraph.wrapFunctionAsNode(
-        "string/compare",
-        compare,
-        ["string", "string"],
-        "boolean"
-    );
-
-    function concatenate(a, b) {
-        if (a === undefined) {
-            return b;
-        }
-        if (b === undefined) {
-            return a;
-        }
-        return a + b;
-    }
-
-    LiteGraph.wrapFunctionAsNode(
-        "string/concatenate",
-        concatenate,
-        ["string", "string"],
-        "string"
-    );
-
-    function contains(a, b) {
-        if (a === undefined || b === undefined) {
-            return false;
-        }
-        return a.indexOf(b) != -1;
-    }
-
-    LiteGraph.wrapFunctionAsNode(
-        "string/contains",
-        contains,
-        ["string", "string"],
-        "boolean"
-    );
-
-    function toUpperCase(a) {
-        if (a != null && a.constructor === String) {
-            return a.toUpperCase();
-        }
-        return a;
-    }
-
-    LiteGraph.wrapFunctionAsNode(
-        "string/toUpperCase",
-        toUpperCase,
-        ["string"],
-        "string"
-    );
-
-    function split(str, separator) {
-		if(separator == null)
-			separator = this.properties.separator;
-        if (str == null )
-	        return [];
-		if( str.constructor === String )
-			return str.split(separator || " ");
-		else if( str.constructor === Array )
-		{
-			var r = [];
-			for(var i = 0; i < str.length; ++i){
-                if (typeof str[i] == "string")
-				    r[i] = str[i].split(separator || " ");
-            }
-			return r;
-		}
-        return null;
-    }
-
-    LiteGraph.wrapFunctionAsNode(
-        "string/split",
-        split,
-        ["string,array", "string"],
-        "array",
-		{ separator: "," }
-    );
-
-    function toFixed(a) {
-        if (a != null && a.constructor === Number) {
-            return a.toFixed(this.properties.precision);
-        }
-        return a;
-    }
-
-    LiteGraph.wrapFunctionAsNode(
-        "string/toFixed",
-        toFixed,
-        ["number"],
-        "string",
-        { precision: 0 }
-    );
-
-
-    function StringToTable() {
-        this.addInput("", "string");
-        this.addOutput("table", "table");
-        this.addOutput("rows", "number");
-        this.addProperty("value", "");
-        this.addProperty("separator", ",");
-		this._table = null;
-    }
-
-    StringToTable.title = "toTable";
-    StringToTable.desc = "Splits a string to table";
-
-    StringToTable.prototype.onExecute = function() {
-        var input = this.getInputData(0);
-		if(!input)
-			return;
-		var separator = this.properties.separator || ",";
-		if(input != this._str || separator != this._last_separator )
-		{
-			this._last_separator = separator;
-			this._str = input;
-			this._table = input.split("\n").map(function(a){ return a.trim().split(separator)});
-		}
-        this.setOutputData(0, this._table );
-        this.setOutputData(1, this._table ? this._table.length : 0 );
-    };
-
-    LiteGraph.registerNodeType("string/toTable", StringToTable);
-
-})(this);
-
 (function(global) {
     var LiteGraph = global.LiteGraph;
 
@@ -20173,901 +20194,155 @@ LiteGraph.registerNodeType("events/waitAll", WaitAll);
     LiteGraph.registerNodeType("logic/IF", logicBranch);
 })(this);
 
+//basic nodes
 (function(global) {
     var LiteGraph = global.LiteGraph;
 
-    function GraphicsPlot() {
-        this.addInput("A", "Number");
-        this.addInput("B", "Number");
-        this.addInput("C", "Number");
-        this.addInput("D", "Number");
-
-        this.values = [[], [], [], []];
-        this.properties = { scale: 2 };
-    }
-
-    GraphicsPlot.title = "Plot";
-    GraphicsPlot.desc = "Plots data over time";
-    GraphicsPlot.colors = ["#FFF", "#F99", "#9F9", "#99F"];
-
-    GraphicsPlot.prototype.onExecute = function(ctx) {
-        if (this.flags.collapsed) {
-            return;
-        }
-
-        var size = this.size;
-
-        for (var i = 0; i < 4; ++i) {
-            var v = this.getInputData(i);
-            if (v == null) {
-                continue;
-            }
-            var values = this.values[i];
-            values.push(v);
-            if (values.length > size[0]) {
-                values.shift();
-            }
-        }
-    };
-
-    GraphicsPlot.prototype.onDrawBackground = function(ctx) {
-        if (this.flags.collapsed) {
-            return;
-        }
-
-        var size = this.size;
-
-        var scale = (0.5 * size[1]) / this.properties.scale;
-        var colors = GraphicsPlot.colors;
-        var offset = size[1] * 0.5;
-
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, size[0], size[1]);
-        ctx.strokeStyle = "#555";
-        ctx.beginPath();
-        ctx.moveTo(0, offset);
-        ctx.lineTo(size[0], offset);
-        ctx.stroke();
-
-        if (this.inputs) {
-            for (var i = 0; i < 4; ++i) {
-                var values = this.values[i];
-                if (!this.inputs[i] || !this.inputs[i].link) {
-                    continue;
-                }
-                ctx.strokeStyle = colors[i];
-                ctx.beginPath();
-                var v = values[0] * scale * -1 + offset;
-                ctx.moveTo(0, clamp(v, 0, size[1]));
-                for (var j = 1; j < values.length && j < size[0]; ++j) {
-                    var v = values[j] * scale * -1 + offset;
-                    ctx.lineTo(j, clamp(v, 0, size[1]));
-                }
-                ctx.stroke();
-            }
-        }
-    };
-
-    LiteGraph.registerNodeType("graphics/plot", GraphicsPlot);
-
-    function GraphicsImage() {
-        this.addOutput("frame", "image");
-        this.properties = { url: "" };
-    }
-
-    GraphicsImage.title = "Image";
-    GraphicsImage.desc = "Image loader";
-    GraphicsImage.widgets = [{ name: "load", text: "Load", type: "button" }];
-
-    GraphicsImage.supported_extensions = ["jpg", "jpeg", "png", "gif"];
-
-    GraphicsImage.prototype.onAdded = function() {
-        if (this.properties["url"] != "" && this.img == null) {
-            this.loadImage(this.properties["url"]);
-        }
-    };
-
-    GraphicsImage.prototype.onDrawBackground = function(ctx) {
-        if (this.flags.collapsed) {
-            return;
-        }
-        if (this.img && this.size[0] > 5 && this.size[1] > 5 && this.img.width) {
-            ctx.drawImage(this.img, 0, 0, this.size[0], this.size[1]);
-        }
-    };
-
-    GraphicsImage.prototype.onExecute = function() {
-        if (!this.img) {
-            this.boxcolor = "#000";
-        }
-        if (this.img && this.img.width) {
-            this.setOutputData(0, this.img);
-        } else {
-            this.setOutputData(0, null);
-        }
-        if (this.img && this.img.dirty) {
-            this.img.dirty = false;
-        }
-    };
-
-    GraphicsImage.prototype.onPropertyChanged = function(name, value) {
-        this.properties[name] = value;
-        if (name == "url" && value != "") {
-            this.loadImage(value);
-        }
-
-        return true;
-    };
-
-    GraphicsImage.prototype.loadImage = function(url, callback) {
-        if (url == "") {
-            this.img = null;
-            return;
-        }
-
-        this.img = document.createElement("img");
-
-        if (url.substr(0, 4) == "http" && LiteGraph.proxy) {
-            url = LiteGraph.proxy + url.substr(url.indexOf(":") + 3);
-        }
-
-        this.img.src = url;
-        this.boxcolor = "#F95";
-        var that = this;
-        this.img.onload = function() {
-            if (callback) {
-                callback(this);
-            }
-            console.log( "Image loaded, size: " + that.img.width + "x" + that.img.height );
-            this.dirty = true;
-            that.boxcolor = "#9F9";
-            that.setDirtyCanvas(true);
-        };
-        this.img.onerror = function() {
-			console.log("error loading the image:" + url);
-		}
-    };
-
-    GraphicsImage.prototype.onWidget = function(e, widget) {
-        if (widget.name == "load") {
-            this.loadImage(this.properties["url"]);
-        }
-    };
-
-    GraphicsImage.prototype.onDropFile = function(file) {
-        var that = this;
-        if (this._url) {
-            URL.revokeObjectURL(this._url);
-        }
-        this._url = URL.createObjectURL(file);
-        this.properties.url = this._url;
-        this.loadImage(this._url, function(img) {
-            that.size[1] = (img.height / img.width) * that.size[0];
-        });
-    };
-
-    LiteGraph.registerNodeType("graphics/image", GraphicsImage);
-
-    function ColorPalette() {
-        this.addInput("f", "number");
-        this.addOutput("Color", "color");
-        this.properties = {
-            colorA: "#444444",
-            colorB: "#44AAFF",
-            colorC: "#44FFAA",
-            colorD: "#FFFFFF"
-        };
-    }
-
-    ColorPalette.title = "Palette";
-    ColorPalette.desc = "Generates a color";
-
-    ColorPalette.prototype.onExecute = function() {
-        var c = [];
-
-        if (this.properties.colorA != null) {
-            c.push(hex2num(this.properties.colorA));
-        }
-        if (this.properties.colorB != null) {
-            c.push(hex2num(this.properties.colorB));
-        }
-        if (this.properties.colorC != null) {
-            c.push(hex2num(this.properties.colorC));
-        }
-        if (this.properties.colorD != null) {
-            c.push(hex2num(this.properties.colorD));
-        }
-
-        var f = this.getInputData(0);
-        if (f == null) {
-            f = 0.5;
-        }
-        if (f > 1.0) {
-            f = 1.0;
-        } else if (f < 0.0) {
-            f = 0.0;
-        }
-
-        if (c.length == 0) {
-            return;
-        }
-
-        var result = [0, 0, 0];
-        if (f == 0) {
-            result = c[0];
-        } else if (f == 1) {
-            result = c[c.length - 1];
-        } else {
-            var pos = (c.length - 1) * f;
-            var c1 = c[Math.floor(pos)];
-            var c2 = c[Math.floor(pos) + 1];
-            var t = pos - Math.floor(pos);
-            result[0] = c1[0] * (1 - t) + c2[0] * t;
-            result[1] = c1[1] * (1 - t) + c2[1] * t;
-            result[2] = c1[2] * (1 - t) + c2[2] * t;
-        }
-
-        /*
-	c[0] = 1.0 - Math.abs( Math.sin( 0.1 * reModular.getTime() * Math.PI) );
-	c[1] = Math.abs( Math.sin( 0.07 * reModular.getTime() * Math.PI) );
-	c[2] = Math.abs( Math.sin( 0.01 * reModular.getTime() * Math.PI) );
-	*/
-
-        for (var i=0; i < result.length; i++) {
-            result[i] /= 255;
-        }
-
-        this.boxcolor = colorToString(result);
-        this.setOutputData(0, result);
-    };
-
-    LiteGraph.registerNodeType("color/palette", ColorPalette);
-
-    function ImageFrame() {
-        this.addInput("", "image,canvas");
-        this.size = [200, 200];
-    }
-
-    ImageFrame.title = "Frame";
-    ImageFrame.desc = "Frame viewerew";
-    ImageFrame.widgets = [
-        { name: "resize", text: "Resize box", type: "button" },
-        { name: "view", text: "View Image", type: "button" }
-    ];
-
-    ImageFrame.prototype.onDrawBackground = function(ctx) {
-        if (this.frame && !this.flags.collapsed) {
-            ctx.drawImage(this.frame, 0, 0, this.size[0], this.size[1]);
-        }
-    };
-
-    ImageFrame.prototype.onExecute = function() {
-        this.frame = this.getInputData(0);
-        this.setDirtyCanvas(true);
-    };
-
-    ImageFrame.prototype.onWidget = function(e, widget) {
-        if (widget.name == "resize" && this.frame) {
-            var width = this.frame.width;
-            var height = this.frame.height;
-
-            if (!width && this.frame.videoWidth != null) {
-                width = this.frame.videoWidth;
-                height = this.frame.videoHeight;
-            }
-
-            if (width && height) {
-                this.size = [width, height];
-            }
-            this.setDirtyCanvas(true, true);
-        } else if (widget.name == "view") {
-            this.show();
-        }
-    };
-
-    ImageFrame.prototype.show = function() {
-        //var str = this.canvas.toDataURL("image/png");
-        if (showElement && this.frame) {
-            showElement(this.frame);
-        }
-    };
-
-    LiteGraph.registerNodeType("graphics/frame", ImageFrame);
-
-    function ImageFade() {
-        this.addInputs([
-            ["img1", "image"],
-            ["img2", "image"],
-            ["fade", "number"]
-        ]);
-        this.addOutput("", "image");
-        this.properties = { fade: 0.5, width: 512, height: 512 };
-    }
-
-    ImageFade.title = "Image fade";
-    ImageFade.desc = "Fades between images";
-    ImageFade.widgets = [
-        { name: "resizeA", text: "Resize to A", type: "button" },
-        { name: "resizeB", text: "Resize to B", type: "button" }
-    ];
-
-    ImageFade.prototype.onAdded = function() {
-        this.createCanvas();
-        var ctx = this.canvas.getContext("2d");
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, this.properties["width"], this.properties["height"]);
-    };
-
-    ImageFade.prototype.createCanvas = function() {
-        this.canvas = document.createElement("canvas");
-        this.canvas.width = this.properties["width"];
-        this.canvas.height = this.properties["height"];
-    };
-
-    ImageFade.prototype.onExecute = function() {
-        var ctx = this.canvas.getContext("2d");
-        this.canvas.width = this.canvas.width;
-
-        var A = this.getInputData(0);
-        if (A != null) {
-            ctx.drawImage(A, 0, 0, this.canvas.width, this.canvas.height);
-        }
-
-        var fade = this.getInputData(2);
-        if (fade == null) {
-            fade = this.properties["fade"];
-        } else {
-            this.properties["fade"] = fade;
-        }
-
-        ctx.globalAlpha = fade;
-        var B = this.getInputData(1);
-        if (B != null) {
-            ctx.drawImage(B, 0, 0, this.canvas.width, this.canvas.height);
-        }
-        ctx.globalAlpha = 1.0;
-
-        this.setOutputData(0, this.canvas);
-        this.setDirtyCanvas(true);
-    };
-
-    LiteGraph.registerNodeType("graphics/imagefade", ImageFade);
-
-    function ImageCrop() {
-        this.addInput("", "image");
-        this.addOutput("", "image");
-        this.properties = { width: 256, height: 256, x: 0, y: 0, scale: 1.0 };
-        this.size = [50, 20];
-    }
-
-    ImageCrop.title = "Crop";
-    ImageCrop.desc = "Crop Image";
-
-    ImageCrop.prototype.onAdded = function() {
-        this.createCanvas();
-    };
-
-    ImageCrop.prototype.createCanvas = function() {
-        this.canvas = document.createElement("canvas");
-        this.canvas.width = this.properties["width"];
-        this.canvas.height = this.properties["height"];
-    };
-
-    ImageCrop.prototype.onExecute = function() {
-        var input = this.getInputData(0);
-        if (!input) {
-            return;
-        }
-
-        if (input.width) {
-            var ctx = this.canvas.getContext("2d");
-
-            ctx.drawImage(
-                input,
-                -this.properties["x"],
-                -this.properties["y"],
-                input.width * this.properties["scale"],
-                input.height * this.properties["scale"]
-            );
-            this.setOutputData(0, this.canvas);
-        } else {
-            this.setOutputData(0, null);
-        }
-    };
-
-    ImageCrop.prototype.onDrawBackground = function(ctx) {
-        if (this.flags.collapsed) {
-            return;
-        }
-        if (this.canvas) {
-            ctx.drawImage(
-                this.canvas,
-                0,
-                0,
-                this.canvas.width,
-                this.canvas.height,
-                0,
-                0,
-                this.size[0],
-                this.size[1]
-            );
-        }
-    };
-
-    ImageCrop.prototype.onPropertyChanged = function(name, value) {
-        this.properties[name] = value;
-
-        if (name == "scale") {
-            this.properties[name] = parseFloat(value);
-            if (this.properties[name] == 0) {
-                console.error("Error in scale");
-                this.properties[name] = 1.0;
-            }
-        } else {
-            this.properties[name] = parseInt(value);
-        }
-
-        this.createCanvas();
-
-        return true;
-    };
-
-    LiteGraph.registerNodeType("graphics/cropImage", ImageCrop);
-
-    //CANVAS stuff
-
-    function CanvasNode() {
-        this.addInput("clear", LiteGraph.ACTION);
-        this.addOutput("", "canvas");
-        this.properties = { width: 512, height: 512, autoclear: true };
-
-        this.canvas = document.createElement("canvas");
-        this.ctx = this.canvas.getContext("2d");
-    }
-
-    CanvasNode.title = "Canvas";
-    CanvasNode.desc = "Canvas to render stuff";
-
-    CanvasNode.prototype.onExecute = function() {
-        var canvas = this.canvas;
-        var w = this.properties.width | 0;
-        var h = this.properties.height | 0;
-        if (canvas.width != w) {
-            canvas.width = w;
-        }
-        if (canvas.height != h) {
-            canvas.height = h;
-        }
-
-        if (this.properties.autoclear) {
-            this.ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }
-        this.setOutputData(0, canvas);
-    };
-
-    CanvasNode.prototype.onAction = function(action, param) {
-        if (action == "clear") {
-            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        }
-    };
-
-    LiteGraph.registerNodeType("graphics/canvas", CanvasNode);
-
-    function DrawImageNode() {
-        this.addInput("canvas", "canvas");
-        this.addInput("img", "image,canvas");
-        this.addInput("x", "number");
-        this.addInput("y", "number");
-        this.properties = { x: 0, y: 0, opacity: 1 };
-    }
-
-    DrawImageNode.title = "DrawImage";
-    DrawImageNode.desc = "Draws image into a canvas";
-
-    DrawImageNode.prototype.onExecute = function() {
-        var canvas = this.getInputData(0);
-        if (!canvas) {
-            return;
-        }
-
-        var img = this.getInputOrProperty("img");
-        if (!img) {
-            return;
-        }
-
-        var x = this.getInputOrProperty("x");
-        var y = this.getInputOrProperty("y");
-        var ctx = canvas.getContext("2d");
-        ctx.drawImage(img, x, y);
-    };
-
-    LiteGraph.registerNodeType("graphics/drawImage", DrawImageNode);
-
-    function DrawRectangleNode() {
-        this.addInput("canvas", "canvas");
-        this.addInput("x", "number");
-        this.addInput("y", "number");
-        this.addInput("w", "number");
-        this.addInput("h", "number");
-        this.properties = {
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-            color: "white",
-            opacity: 1
-        };
-    }
-
-    DrawRectangleNode.title = "DrawRectangle";
-    DrawRectangleNode.desc = "Draws rectangle in canvas";
-
-    DrawRectangleNode.prototype.onExecute = function() {
-        var canvas = this.getInputData(0);
-        if (!canvas) {
-            return;
-        }
-
-        var x = this.getInputOrProperty("x");
-        var y = this.getInputOrProperty("y");
-        var w = this.getInputOrProperty("w");
-        var h = this.getInputOrProperty("h");
-        var ctx = canvas.getContext("2d");
-        ctx.fillRect(x, y, w, h);
-    };
-
-    LiteGraph.registerNodeType("graphics/drawRectangle", DrawRectangleNode);
-
-    function ImageVideo() {
-        this.addInput("t", "number");
-        this.addOutputs([["frame", "image"], ["t", "number"], ["d", "number"]]);
-        this.properties = { url: "", use_proxy: true };
-    }
-
-    ImageVideo.title = "Video";
-    ImageVideo.desc = "Video playback";
-    ImageVideo.widgets = [
-        { name: "play", text: "PLAY", type: "minibutton" },
-        { name: "stop", text: "STOP", type: "minibutton" },
-        { name: "demo", text: "Demo video", type: "button" },
-        { name: "mute", text: "Mute video", type: "button" }
-    ];
-
-    ImageVideo.prototype.onExecute = function() {
-        if (!this.properties.url) {
-            return;
-        }
-
-        if (this.properties.url != this._video_url) {
-            this.loadVideo(this.properties.url);
-        }
-
-        if (!this._video || this._video.width == 0) {
-            return;
-        }
-
-        var t = this.getInputData(0);
-        if (t && t >= 0 && t <= 1.0) {
-            this._video.currentTime = t * this._video.duration;
-            this._video.pause();
-        }
-
-        this._video.dirty = true;
-        this.setOutputData(0, this._video);
-        this.setOutputData(1, this._video.currentTime);
-        this.setOutputData(2, this._video.duration);
-        this.setDirtyCanvas(true);
-    };
-
-    ImageVideo.prototype.onStart = function() {
-        this.play();
-    };
-
-    ImageVideo.prototype.onStop = function() {
-        this.stop();
-    };
-
-    ImageVideo.prototype.loadVideo = function(url) {
-        this._video_url = url;
-
-		var pos = url.substr(0,10).indexOf(":");
-		var protocol = "";
-		if(pos != -1)
-			protocol = url.substr(0,pos);
-
-		var host = "";
-		if(protocol)
+    function toString(a) {
+		if(a && a.constructor === Object)
 		{
-			host = url.substr(0,url.indexOf("/",protocol.length + 3));
-			host = host.substr(protocol.length+3);
+			try
+			{
+				return JSON.stringify(a);
+			}
+			catch (err)
+			{
+				return String(a);
+			}
 		}
-
-        if (
-            this.properties.use_proxy &&
-            protocol &&
-            LiteGraph.proxy &&
-			host != location.host
-        ) {
-            url = LiteGraph.proxy + url.substr(url.indexOf(":") + 3);
-        }
-
-        this._video = document.createElement("video");
-        this._video.src = url;
-        this._video.type = "type=video/mp4";
-
-        this._video.muted = true;
-        this._video.autoplay = true;
-
-        var that = this;
-        this._video.addEventListener("loadedmetadata", function(e) {
-            //onload
-            console.log("Duration: " + this.duration + " seconds");
-            console.log("Size: " + this.videoWidth + "," + this.videoHeight);
-            that.setDirtyCanvas(true);
-            this.width = this.videoWidth;
-            this.height = this.videoHeight;
-        });
-        this._video.addEventListener("progress", function(e) {
-            //onload
-            console.log("video loading...");
-        });
-        this._video.addEventListener("error", function(e) {
-            console.error("Error loading video: " + this.src);
-            if (this.error) {
-                switch (this.error.code) {
-                    case this.error.MEDIA_ERR_ABORTED:
-                        console.error("You stopped the video.");
-                        break;
-                    case this.error.MEDIA_ERR_NETWORK:
-                        console.error("Network error - please try again later.");
-                        break;
-                    case this.error.MEDIA_ERR_DECODE:
-                        console.error("Video is broken..");
-                        break;
-                    case this.error.MEDIA_ERR_SRC_NOT_SUPPORTED:
-                        console.error("Sorry, your browser can't play this video.");
-                        break;
-                }
-            }
-        });
-
-        this._video.addEventListener("ended", function(e) {
-            console.log("Video Ended.");
-            this.play(); //loop
-        });
-
-        //document.body.appendChild(this.video);
-    };
-
-    ImageVideo.prototype.onPropertyChanged = function(name, value) {
-        this.properties[name] = value;
-        if (name == "url" && value != "") {
-            this.loadVideo(value);
-        }
-
-        return true;
-    };
-
-    ImageVideo.prototype.play = function() {
-        if (this._video && this._video.videoWidth ) { //is loaded
-            this._video.play();
-        }
-    };
-
-    ImageVideo.prototype.playPause = function() {
-        if (!this._video) {
-            return;
-        }
-        if (this._video.paused) {
-            this.play();
-        } else {
-            this.pause();
-        }
-    };
-
-    ImageVideo.prototype.stop = function() {
-        if (!this._video) {
-            return;
-        }
-        this._video.pause();
-        this._video.currentTime = 0;
-    };
-
-    ImageVideo.prototype.pause = function() {
-        if (!this._video) {
-            return;
-        }
-        console.log("Video paused");
-        this._video.pause();
-    };
-
-    ImageVideo.prototype.onWidget = function(e, widget) {
-        /*
-	if(widget.name == "demo")
-	{
-		this.loadVideo();
-	}
-	else if(widget.name == "play")
-	{
-		if(this._video)
-			this.playPause();
-	}
-	if(widget.name == "stop")
-	{
-		this.stop();
-	}
-	else if(widget.name == "mute")
-	{
-		if(this._video)
-			this._video.muted = !this._video.muted;
-	}
-	*/
-    };
-
-    LiteGraph.registerNodeType("graphics/video", ImageVideo);
-
-    // Texture Webcam *****************************************
-    function ImageWebcam() {
-        this.addOutput("Webcam", "image");
-        this.properties = { filterFacingMode: false, facingMode: "user" };
-        this.boxcolor = "black";
-        this.frame = 0;
+        return String(a);
     }
 
-    ImageWebcam.title = "Webcam";
-    ImageWebcam.desc = "Webcam image";
-    ImageWebcam.is_webcam_open = false;
+    LiteGraph.wrapFunctionAsNode("string/toString", toString, [""], "string");
 
-    ImageWebcam.prototype.openStream = function() {
-        if (!navigator.mediaDevices.getUserMedia) {
-            console.log('getUserMedia() is not supported in your browser, use chrome and enable WebRTC from about://flags');
-            return;
+    function compare(a, b) {
+        return a == b;
+    }
+
+    LiteGraph.wrapFunctionAsNode(
+        "string/compare",
+        compare,
+        ["string", "string"],
+        "boolean"
+    );
+
+    function concatenate(a, b) {
+        if (a === undefined) {
+            return b;
         }
-
-        this._waiting_confirmation = true;
-
-        // Not showing vendor prefixes.
-        var constraints = {
-            audio: false,
-            video: !this.properties.filterFacingMode ? true : { facingMode: this.properties.facingMode }
-        };
-        navigator.mediaDevices
-            .getUserMedia(constraints)
-            .then(this.streamReady.bind(this))
-            .catch(onFailSoHard);
-
-        var that = this;
-        function onFailSoHard(e) {
-            console.log("Webcam rejected", e);
-            that._webcam_stream = false;
-            ImageWebcam.is_webcam_open = false;
-            that.boxcolor = "red";
-            that.trigger("stream_error");
+        if (b === undefined) {
+            return a;
         }
-    };
+        return a + b;
+    }
 
-    ImageWebcam.prototype.closeStream = function() {
-        if (this._webcam_stream) {
-            var tracks = this._webcam_stream.getTracks();
-            if (tracks.length) {
-                for (var i = 0; i < tracks.length; ++i) {
-                    tracks[i].stop();
-                }
+    LiteGraph.wrapFunctionAsNode(
+        "string/concatenate",
+        concatenate,
+        ["string", "string"],
+        "string"
+    );
+
+    function contains(a, b) {
+        if (a === undefined || b === undefined) {
+            return false;
+        }
+        return a.indexOf(b) != -1;
+    }
+
+    LiteGraph.wrapFunctionAsNode(
+        "string/contains",
+        contains,
+        ["string", "string"],
+        "boolean"
+    );
+
+    function toUpperCase(a) {
+        if (a != null && a.constructor === String) {
+            return a.toUpperCase();
+        }
+        return a;
+    }
+
+    LiteGraph.wrapFunctionAsNode(
+        "string/toUpperCase",
+        toUpperCase,
+        ["string"],
+        "string"
+    );
+
+    function split(str, separator) {
+		if(separator == null)
+			separator = this.properties.separator;
+        if (str == null )
+	        return [];
+		if( str.constructor === String )
+			return str.split(separator || " ");
+		else if( str.constructor === Array )
+		{
+			var r = [];
+			for(var i = 0; i < str.length; ++i){
+                if (typeof str[i] == "string")
+				    r[i] = str[i].split(separator || " ");
             }
-            ImageWebcam.is_webcam_open = false;
-            this._webcam_stream = null;
-            this._video = null;
-            this.boxcolor = "black";
-            this.trigger("stream_closed");
+			return r;
+		}
+        return null;
+    }
+
+    LiteGraph.wrapFunctionAsNode(
+        "string/split",
+        split,
+        ["string,array", "string"],
+        "array",
+		{ separator: "," }
+    );
+
+    function toFixed(a) {
+        if (a != null && a.constructor === Number) {
+            return a.toFixed(this.properties.precision);
         }
+        return a;
+    }
+
+    LiteGraph.wrapFunctionAsNode(
+        "string/toFixed",
+        toFixed,
+        ["number"],
+        "string",
+        { precision: 0 }
+    );
+
+
+    function StringToTable() {
+        this.addInput("", "string");
+        this.addOutput("table", "table");
+        this.addOutput("rows", "number");
+        this.addProperty("value", "");
+        this.addProperty("separator", ",");
+		this._table = null;
+    }
+
+    StringToTable.title = "toTable";
+    StringToTable.desc = "Splits a string to table";
+
+    StringToTable.prototype.onExecute = function() {
+        var input = this.getInputData(0);
+		if(!input)
+			return;
+		var separator = this.properties.separator || ",";
+		if(input != this._str || separator != this._last_separator )
+		{
+			this._last_separator = separator;
+			this._str = input;
+			this._table = input.split("\n").map(function(a){ return a.trim().split(separator)});
+		}
+        this.setOutputData(0, this._table );
+        this.setOutputData(1, this._table ? this._table.length : 0 );
     };
 
-    ImageWebcam.prototype.onPropertyChanged = function(name, value) {
-        if (name == "facingMode") {
-            this.properties.facingMode = value;
-            this.closeStream();
-            this.openStream();
-        }
-    };
+    LiteGraph.registerNodeType("string/toTable", StringToTable);
 
-    ImageWebcam.prototype.onRemoved = function() {
-        this.closeStream();
-    };
-
-    ImageWebcam.prototype.streamReady = function(localMediaStream) {
-        this._webcam_stream = localMediaStream;
-        //this._waiting_confirmation = false;
-        this.boxcolor = "green";
-
-        var video = this._video;
-        if (!video) {
-            video = document.createElement("video");
-            video.autoplay = true;
-            video.srcObject = localMediaStream;
-            this._video = video;
-            //document.body.appendChild( video ); //debug
-            //when video info is loaded (size and so)
-            video.onloadedmetadata = function(e) {
-                // Ready to go. Do some stuff.
-                console.log(e);
-                ImageWebcam.is_webcam_open = true;
-            };
-        }
-
-        this.trigger("stream_ready", video);
-    };
-
-    ImageWebcam.prototype.onExecute = function() {
-        if (this._webcam_stream == null && !this._waiting_confirmation) {
-            this.openStream();
-        }
-
-        if (!this._video || !this._video.videoWidth) {
-            return;
-        }
-
-        this._video.frame = ++this.frame;
-        this._video.width = this._video.videoWidth;
-        this._video.height = this._video.videoHeight;
-        this.setOutputData(0, this._video);
-        for (var i = 1; i < this.outputs.length; ++i) {
-            if (!this.outputs[i]) {
-                continue;
-            }
-            switch (this.outputs[i].name) {
-                case "width":
-                    this.setOutputData(i, this._video.videoWidth);
-                    break;
-                case "height":
-                    this.setOutputData(i, this._video.videoHeight);
-                    break;
-            }
-        }
-    };
-
-    ImageWebcam.prototype.getExtraMenuOptions = function(graphcanvas) {
-        var that = this;
-        var txt = !that.properties.show ? "Show Frame" : "Hide Frame";
-        return [
-            {
-                content: txt,
-                callback: function() {
-                    that.properties.show = !that.properties.show;
-                }
-            }
-        ];
-    };
-
-    ImageWebcam.prototype.onDrawBackground = function(ctx) {
-        if (
-            this.flags.collapsed ||
-            this.size[1] <= 20 ||
-            !this.properties.show
-        ) {
-            return;
-        }
-
-        if (!this._video) {
-            return;
-        }
-
-        //render to graph canvas
-        ctx.save();
-        ctx.drawImage(this._video, 0, 0, this.size[0], this.size[1]);
-        ctx.restore();
-    };
-
-    ImageWebcam.prototype.onGetOutputs = function() {
-        return [
-            ["width", "number"],
-            ["height", "number"],
-            ["stream_ready", LiteGraph.EVENT],
-            ["stream_closed", LiteGraph.EVENT],
-            ["stream_error", LiteGraph.EVENT]
-        ];
-    };
-
-    LiteGraph.registerNodeType("graphics/webcam", ImageWebcam);
 })(this);
 
 (function(global) {
@@ -26560,6 +25835,795 @@ void main(void){\n\
 })(this);
 
 (function(global) {
+    var LiteGraph = global.LiteGraph;
+    var LGraphTexture = global.LGraphTexture;
+
+    //Works with Litegl.js to create WebGL nodes
+    if (typeof GL != "undefined") {
+        // Texture Lens *****************************************
+        function LGraphFXLens() {
+            this.addInput("Texture", "Texture");
+            this.addInput("Aberration", "number");
+            this.addInput("Distortion", "number");
+            this.addInput("Blur", "number");
+            this.addOutput("Texture", "Texture");
+            this.properties = {
+                aberration: 1.0,
+                distortion: 1.0,
+                blur: 1.0,
+                precision: LGraphTexture.DEFAULT
+            };
+
+            if (!LGraphFXLens._shader) {
+                LGraphFXLens._shader = new GL.Shader(
+                    GL.Shader.SCREEN_VERTEX_SHADER,
+                    LGraphFXLens.pixel_shader
+                );
+                LGraphFXLens._texture = new GL.Texture(3, 1, {
+                    format: gl.RGB,
+                    wrap: gl.CLAMP_TO_EDGE,
+                    magFilter: gl.LINEAR,
+                    minFilter: gl.LINEAR,
+                    pixel_data: [255, 0, 0, 0, 255, 0, 0, 0, 255]
+                });
+            }
+        }
+
+        LGraphFXLens.title = "Lens";
+        LGraphFXLens.desc = "Camera Lens distortion";
+        LGraphFXLens.widgets_info = {
+            precision: { widget: "combo", values: LGraphTexture.MODE_VALUES }
+        };
+
+        LGraphFXLens.prototype.onExecute = function() {
+            var tex = this.getInputData(0);
+            if (this.properties.precision === LGraphTexture.PASS_THROUGH) {
+                this.setOutputData(0, tex);
+                return;
+            }
+
+            if (!tex) {
+                return;
+            }
+
+            this._tex = LGraphTexture.getTargetTexture(
+                tex,
+                this._tex,
+                this.properties.precision
+            );
+
+            var aberration = this.properties.aberration;
+            if (this.isInputConnected(1)) {
+                aberration = this.getInputData(1);
+                this.properties.aberration = aberration;
+            }
+
+            var distortion = this.properties.distortion;
+            if (this.isInputConnected(2)) {
+                distortion = this.getInputData(2);
+                this.properties.distortion = distortion;
+            }
+
+            var blur = this.properties.blur;
+            if (this.isInputConnected(3)) {
+                blur = this.getInputData(3);
+                this.properties.blur = blur;
+            }
+
+            gl.disable(gl.BLEND);
+            gl.disable(gl.DEPTH_TEST);
+            var mesh = Mesh.getScreenQuad();
+            var shader = LGraphFXLens._shader;
+            //var camera = LS.Renderer._current_camera;
+
+            this._tex.drawTo(function() {
+                tex.bind(0);
+                shader
+                    .uniforms({
+                        u_texture: 0,
+                        u_aberration: aberration,
+                        u_distortion: distortion,
+                        u_blur: blur
+                    })
+                    .draw(mesh);
+            });
+
+            this.setOutputData(0, this._tex);
+        };
+
+        LGraphFXLens.pixel_shader =
+            "precision highp float;\n\
+			precision highp float;\n\
+			varying vec2 v_coord;\n\
+			uniform sampler2D u_texture;\n\
+			uniform vec2 u_camera_planes;\n\
+			uniform float u_aberration;\n\
+			uniform float u_distortion;\n\
+			uniform float u_blur;\n\
+			\n\
+			void main() {\n\
+				vec2 coord = v_coord;\n\
+				float dist = distance(vec2(0.5), coord);\n\
+				vec2 dist_coord = coord - vec2(0.5);\n\
+				float percent = 1.0 + ((0.5 - dist) / 0.5) * u_distortion;\n\
+				dist_coord *= percent;\n\
+				coord = dist_coord + vec2(0.5);\n\
+				vec4 color = texture2D(u_texture,coord, u_blur * dist);\n\
+				color.r = texture2D(u_texture,vec2(0.5) + dist_coord * (1.0+0.01*u_aberration), u_blur * dist ).r;\n\
+				color.b = texture2D(u_texture,vec2(0.5) + dist_coord * (1.0-0.01*u_aberration), u_blur * dist ).b;\n\
+				gl_FragColor = color;\n\
+			}\n\
+			";
+        /*
+			float normalized_tunable_sigmoid(float xs, float k)\n\
+			{\n\
+				xs = xs * 2.0 - 1.0;\n\
+				float signx = sign(xs);\n\
+				float absx = abs(xs);\n\
+				return signx * ((-k - 1.0)*absx)/(2.0*(-2.0*k*absx+k-1.0)) + 0.5;\n\
+			}\n\
+		*/
+
+        LiteGraph.registerNodeType("fx/lens", LGraphFXLens);
+        global.LGraphFXLens = LGraphFXLens;
+
+        /* not working yet
+	function LGraphDepthOfField()
+	{
+		this.addInput("Color","Texture");
+		this.addInput("Linear Depth","Texture");
+		this.addInput("Camera","camera");
+		this.addOutput("Texture","Texture");
+		this.properties = { high_precision: false };
+	}
+
+	LGraphDepthOfField.title = "Depth Of Field";
+	LGraphDepthOfField.desc = "Applies a depth of field effect";
+
+	LGraphDepthOfField.prototype.onExecute = function()
+	{
+		var tex = this.getInputData(0);
+		var depth = this.getInputData(1);
+		var camera = this.getInputData(2);
+
+		if(!tex || !depth || !camera) 
+		{
+			this.setOutputData(0, tex);
+			return;
+		}
+
+		var precision = gl.UNSIGNED_BYTE;
+		if(this.properties.high_precision)
+			precision = gl.half_float_ext ? gl.HALF_FLOAT_OES : gl.FLOAT;			
+		if(!this._temp_texture || this._temp_texture.type != precision ||
+			this._temp_texture.width != tex.width || this._temp_texture.height != tex.height)
+			this._temp_texture = new GL.Texture( tex.width, tex.height, { type: precision, format: gl.RGBA, filter: gl.LINEAR });
+
+		var shader = LGraphDepthOfField._shader = new GL.Shader( GL.Shader.SCREEN_VERTEX_SHADER, LGraphDepthOfField._pixel_shader );
+
+		var screen_mesh = Mesh.getScreenQuad();
+
+		gl.disable( gl.DEPTH_TEST );
+		gl.disable( gl.BLEND );
+
+		var camera_position = camera.getEye();
+		var focus_point = camera.getCenter();
+		var distance = vec3.distance( camera_position, focus_point );
+		var far = camera.far;
+		var focus_range = distance * 0.5;
+
+		this._temp_texture.drawTo( function() {
+			tex.bind(0);
+			depth.bind(1);
+			shader.uniforms({u_texture:0, u_depth_texture:1, u_resolution: [1/tex.width, 1/tex.height], u_far: far, u_focus_point: distance, u_focus_scale: focus_range }).draw(screen_mesh);
+		});
+
+		this.setOutputData(0, this._temp_texture);
+	}
+
+	//from http://tuxedolabs.blogspot.com.es/2018/05/bokeh-depth-of-field-in-single-pass.html
+	LGraphDepthOfField._pixel_shader = "\n\
+		precision highp float;\n\
+		varying vec2 v_coord;\n\
+		uniform sampler2D u_texture; //Image to be processed\n\
+		uniform sampler2D u_depth_texture; //Linear depth, where 1.0 == far plane\n\
+		uniform vec2 u_iresolution; //The size of a pixel: vec2(1.0/width, 1.0/height)\n\
+		uniform float u_far; // Far plane\n\
+		uniform float u_focus_point;\n\
+		uniform float u_focus_scale;\n\
+		\n\
+		const float GOLDEN_ANGLE = 2.39996323;\n\
+		const float MAX_BLUR_SIZE = 20.0;\n\
+		const float RAD_SCALE = 0.5; // Smaller = nicer blur, larger = faster\n\
+		\n\
+		float getBlurSize(float depth, float focusPoint, float focusScale)\n\
+		{\n\
+		 float coc = clamp((1.0 / focusPoint - 1.0 / depth)*focusScale, -1.0, 1.0);\n\
+		 return abs(coc) * MAX_BLUR_SIZE;\n\
+		}\n\
+		\n\
+		vec3 depthOfField(vec2 texCoord, float focusPoint, float focusScale)\n\
+		{\n\
+		 float centerDepth = texture2D(u_depth_texture, texCoord).r * u_far;\n\
+		 float centerSize = getBlurSize(centerDepth, focusPoint, focusScale);\n\
+		 vec3 color = texture2D(u_texture, v_coord).rgb;\n\
+		 float tot = 1.0;\n\
+		\n\
+		 float radius = RAD_SCALE;\n\
+		 for (float ang = 0.0; ang < 100.0; ang += GOLDEN_ANGLE)\n\
+		 {\n\
+		  vec2 tc = texCoord + vec2(cos(ang), sin(ang)) * u_iresolution * radius;\n\
+			\n\
+		  vec3 sampleColor = texture2D(u_texture, tc).rgb;\n\
+		  float sampleDepth = texture2D(u_depth_texture, tc).r * u_far;\n\
+		  float sampleSize = getBlurSize( sampleDepth, focusPoint, focusScale );\n\
+		  if (sampleDepth > centerDepth)\n\
+		   sampleSize = clamp(sampleSize, 0.0, centerSize*2.0);\n\
+			\n\
+		  float m = smoothstep(radius-0.5, radius+0.5, sampleSize);\n\
+		  color += mix(color/tot, sampleColor, m);\n\
+		  tot += 1.0;\n\
+		  radius += RAD_SCALE/radius;\n\
+		  if(radius>=MAX_BLUR_SIZE)\n\
+			 return color / tot;\n\
+		 }\n\
+		 return color / tot;\n\
+		}\n\
+		void main()\n\
+		{\n\
+			gl_FragColor = vec4( depthOfField( v_coord, u_focus_point, u_focus_scale ), 1.0 );\n\
+			//gl_FragColor = vec4( texture2D(u_depth_texture, v_coord).r );\n\
+		}\n\
+		";
+
+	LiteGraph.registerNodeType("fx/DOF", LGraphDepthOfField );
+	global.LGraphDepthOfField = LGraphDepthOfField;
+	*/
+
+        //*******************************************************
+
+        function LGraphFXBokeh() {
+            this.addInput("Texture", "Texture");
+            this.addInput("Blurred", "Texture");
+            this.addInput("Mask", "Texture");
+            this.addInput("Threshold", "number");
+            this.addOutput("Texture", "Texture");
+            this.properties = {
+                shape: "",
+                size: 10,
+                alpha: 1.0,
+                threshold: 1.0,
+                high_precision: false
+            };
+        }
+
+        LGraphFXBokeh.title = "Bokeh";
+        LGraphFXBokeh.desc = "applies an Bokeh effect";
+
+        LGraphFXBokeh.widgets_info = { shape: { widget: "texture" } };
+
+        LGraphFXBokeh.prototype.onExecute = function() {
+            var tex = this.getInputData(0);
+            var blurred_tex = this.getInputData(1);
+            var mask_tex = this.getInputData(2);
+            if (!tex || !mask_tex || !this.properties.shape) {
+                this.setOutputData(0, tex);
+                return;
+            }
+
+            if (!blurred_tex) {
+                blurred_tex = tex;
+            }
+
+            var shape_tex = LGraphTexture.getTexture(this.properties.shape);
+            if (!shape_tex) {
+                return;
+            }
+
+            var threshold = this.properties.threshold;
+            if (this.isInputConnected(3)) {
+                threshold = this.getInputData(3);
+                this.properties.threshold = threshold;
+            }
+
+            var precision = gl.UNSIGNED_BYTE;
+            if (this.properties.high_precision) {
+                precision = gl.half_float_ext ? gl.HALF_FLOAT_OES : gl.FLOAT;
+            }
+            if (
+                !this._temp_texture ||
+                this._temp_texture.type != precision ||
+                this._temp_texture.width != tex.width ||
+                this._temp_texture.height != tex.height
+            ) {
+                this._temp_texture = new GL.Texture(tex.width, tex.height, {
+                    type: precision,
+                    format: gl.RGBA,
+                    filter: gl.LINEAR
+                });
+            }
+
+            //iterations
+            var size = this.properties.size;
+
+            var first_shader = LGraphFXBokeh._first_shader;
+            if (!first_shader) {
+                first_shader = LGraphFXBokeh._first_shader = new GL.Shader(
+                    Shader.SCREEN_VERTEX_SHADER,
+                    LGraphFXBokeh._first_pixel_shader
+                );
+            }
+
+            var second_shader = LGraphFXBokeh._second_shader;
+            if (!second_shader) {
+                second_shader = LGraphFXBokeh._second_shader = new GL.Shader(
+                    LGraphFXBokeh._second_vertex_shader,
+                    LGraphFXBokeh._second_pixel_shader
+                );
+            }
+
+            var points_mesh = this._points_mesh;
+            if (
+                !points_mesh ||
+                points_mesh._width != tex.width ||
+                points_mesh._height != tex.height ||
+                points_mesh._spacing != 2
+            ) {
+                points_mesh = this.createPointsMesh(tex.width, tex.height, 2);
+            }
+
+            var screen_mesh = Mesh.getScreenQuad();
+
+            var point_size = this.properties.size;
+            var min_light = this.properties.min_light;
+            var alpha = this.properties.alpha;
+
+            gl.disable(gl.DEPTH_TEST);
+            gl.disable(gl.BLEND);
+
+            this._temp_texture.drawTo(function() {
+                tex.bind(0);
+                blurred_tex.bind(1);
+                mask_tex.bind(2);
+                first_shader
+                    .uniforms({
+                        u_texture: 0,
+                        u_texture_blur: 1,
+                        u_mask: 2,
+                        u_texsize: [tex.width, tex.height]
+                    })
+                    .draw(screen_mesh);
+            });
+
+            this._temp_texture.drawTo(function() {
+                //clear because we use blending
+                //gl.clearColor(0.0,0.0,0.0,1.0);
+                //gl.clear( gl.COLOR_BUFFER_BIT );
+                gl.enable(gl.BLEND);
+                gl.blendFunc(gl.ONE, gl.ONE);
+
+                tex.bind(0);
+                shape_tex.bind(3);
+                second_shader
+                    .uniforms({
+                        u_texture: 0,
+                        u_mask: 2,
+                        u_shape: 3,
+                        u_alpha: alpha,
+                        u_threshold: threshold,
+                        u_pointSize: point_size,
+                        u_itexsize: [1.0 / tex.width, 1.0 / tex.height]
+                    })
+                    .draw(points_mesh, gl.POINTS);
+            });
+
+            this.setOutputData(0, this._temp_texture);
+        };
+
+        LGraphFXBokeh.prototype.createPointsMesh = function(
+            width,
+            height,
+            spacing
+        ) {
+            var nwidth = Math.round(width / spacing);
+            var nheight = Math.round(height / spacing);
+
+            var vertices = new Float32Array(nwidth * nheight * 2);
+
+            var ny = -1;
+            var dx = (2 / width) * spacing;
+            var dy = (2 / height) * spacing;
+            for (var y = 0; y < nheight; ++y) {
+                var nx = -1;
+                for (var x = 0; x < nwidth; ++x) {
+                    var pos = y * nwidth * 2 + x * 2;
+                    vertices[pos] = nx;
+                    vertices[pos + 1] = ny;
+                    nx += dx;
+                }
+                ny += dy;
+            }
+
+            this._points_mesh = GL.Mesh.load({ vertices2D: vertices });
+            this._points_mesh._width = width;
+            this._points_mesh._height = height;
+            this._points_mesh._spacing = spacing;
+
+            return this._points_mesh;
+        };
+
+        /*
+	LGraphTextureBokeh._pixel_shader = "precision highp float;\n\
+			varying vec2 a_coord;\n\
+			uniform sampler2D u_texture;\n\
+			uniform sampler2D u_shape;\n\
+			\n\
+			void main() {\n\
+				vec4 color = texture2D( u_texture, gl_PointCoord );\n\
+				color *= v_color * u_alpha;\n\
+				gl_FragColor = color;\n\
+			}\n";
+	*/
+
+        LGraphFXBokeh._first_pixel_shader =
+            "precision highp float;\n\
+			precision highp float;\n\
+			varying vec2 v_coord;\n\
+			uniform sampler2D u_texture;\n\
+			uniform sampler2D u_texture_blur;\n\
+			uniform sampler2D u_mask;\n\
+			\n\
+			void main() {\n\
+				vec4 color = texture2D(u_texture, v_coord);\n\
+				vec4 blurred_color = texture2D(u_texture_blur, v_coord);\n\
+				float mask = texture2D(u_mask, v_coord).x;\n\
+			   gl_FragColor = mix(color, blurred_color, mask);\n\
+			}\n\
+			";
+
+        LGraphFXBokeh._second_vertex_shader =
+            "precision highp float;\n\
+			attribute vec2 a_vertex2D;\n\
+			varying vec4 v_color;\n\
+			uniform sampler2D u_texture;\n\
+			uniform sampler2D u_mask;\n\
+			uniform vec2 u_itexsize;\n\
+			uniform float u_pointSize;\n\
+			uniform float u_threshold;\n\
+			void main() {\n\
+				vec2 coord = a_vertex2D * 0.5 + 0.5;\n\
+				v_color = texture2D( u_texture, coord );\n\
+				v_color += texture2D( u_texture, coord + vec2(u_itexsize.x, 0.0) );\n\
+				v_color += texture2D( u_texture, coord + vec2(0.0, u_itexsize.y));\n\
+				v_color += texture2D( u_texture, coord + u_itexsize);\n\
+				v_color *= 0.25;\n\
+				float mask = texture2D(u_mask, coord).x;\n\
+				float luminance = length(v_color) * mask;\n\
+				/*luminance /= (u_pointSize*u_pointSize)*0.01 */;\n\
+				luminance -= u_threshold;\n\
+				if(luminance < 0.0)\n\
+				{\n\
+					gl_Position.x = -100.0;\n\
+					return;\n\
+				}\n\
+				gl_PointSize = u_pointSize;\n\
+				gl_Position = vec4(a_vertex2D,0.0,1.0);\n\
+			}\n\
+			";
+
+        LGraphFXBokeh._second_pixel_shader =
+            "precision highp float;\n\
+			varying vec4 v_color;\n\
+			uniform sampler2D u_shape;\n\
+			uniform float u_alpha;\n\
+			\n\
+			void main() {\n\
+				vec4 color = texture2D( u_shape, gl_PointCoord );\n\
+				color *= v_color * u_alpha;\n\
+				gl_FragColor = color;\n\
+			}\n";
+
+        LiteGraph.registerNodeType("fx/bokeh", LGraphFXBokeh);
+        global.LGraphFXBokeh = LGraphFXBokeh;
+
+        //************************************************
+
+        function LGraphFXGeneric() {
+            this.addInput("Texture", "Texture");
+            this.addInput("value1", "number");
+            this.addInput("value2", "number");
+            this.addOutput("Texture", "Texture");
+            this.properties = {
+                fx: "halftone",
+                value1: 1,
+                value2: 1,
+                precision: LGraphTexture.DEFAULT
+            };
+        }
+
+        LGraphFXGeneric.title = "FX";
+        LGraphFXGeneric.desc = "applies an FX from a list";
+
+        LGraphFXGeneric.widgets_info = {
+            fx: {
+                widget: "combo",
+                values: ["halftone", "pixelate", "lowpalette", "noise", "gamma"]
+            },
+            precision: { widget: "combo", values: LGraphTexture.MODE_VALUES }
+        };
+        LGraphFXGeneric.shaders = {};
+
+        LGraphFXGeneric.prototype.onExecute = function() {
+            if (!this.isOutputConnected(0)) {
+                return;
+            } //saves work
+
+            var tex = this.getInputData(0);
+            if (this.properties.precision === LGraphTexture.PASS_THROUGH) {
+                this.setOutputData(0, tex);
+                return;
+            }
+
+            if (!tex) {
+                return;
+            }
+
+            this._tex = LGraphTexture.getTargetTexture(
+                tex,
+                this._tex,
+                this.properties.precision
+            );
+
+            //iterations
+            var value1 = this.properties.value1;
+            if (this.isInputConnected(1)) {
+                value1 = this.getInputData(1);
+                this.properties.value1 = value1;
+            }
+
+            var value2 = this.properties.value2;
+            if (this.isInputConnected(2)) {
+                value2 = this.getInputData(2);
+                this.properties.value2 = value2;
+            }
+
+            var fx = this.properties.fx;
+            var shader = LGraphFXGeneric.shaders[fx];
+            if (!shader) {
+                var pixel_shader_code = LGraphFXGeneric["pixel_shader_" + fx];
+                if (!pixel_shader_code) {
+                    return;
+                }
+
+                shader = LGraphFXGeneric.shaders[fx] = new GL.Shader(
+                    Shader.SCREEN_VERTEX_SHADER,
+                    pixel_shader_code
+                );
+            }
+
+            gl.disable(gl.BLEND);
+            gl.disable(gl.DEPTH_TEST);
+            var mesh = Mesh.getScreenQuad();
+            var camera = global.LS ? LS.Renderer._current_camera : null;
+            var camera_planes;
+            if (camera) {
+                camera_planes = [
+                    LS.Renderer._current_camera.near,
+                    LS.Renderer._current_camera.far
+                ];
+            } else {
+                camera_planes = [1, 100];
+            }
+
+            var noise = null;
+            if (fx == "noise") {
+                noise = LGraphTexture.getNoiseTexture();
+            }
+
+            this._tex.drawTo(function() {
+                tex.bind(0);
+                if (fx == "noise") {
+                    noise.bind(1);
+                }
+
+                shader
+                    .uniforms({
+                        u_texture: 0,
+                        u_noise: 1,
+                        u_size: [tex.width, tex.height],
+                        u_rand: [Math.random(), Math.random()],
+                        u_value1: value1,
+                        u_value2: value2,
+                        u_camera_planes: camera_planes
+                    })
+                    .draw(mesh);
+            });
+
+            this.setOutputData(0, this._tex);
+        };
+
+        LGraphFXGeneric.pixel_shader_halftone =
+            "precision highp float;\n\
+			varying vec2 v_coord;\n\
+			uniform sampler2D u_texture;\n\
+			uniform vec2 u_camera_planes;\n\
+			uniform vec2 u_size;\n\
+			uniform float u_value1;\n\
+			uniform float u_value2;\n\
+			\n\
+			float pattern() {\n\
+				float s = sin(u_value1 * 3.1415), c = cos(u_value1 * 3.1415);\n\
+				vec2 tex = v_coord * u_size.xy;\n\
+				vec2 point = vec2(\n\
+				   c * tex.x - s * tex.y ,\n\
+				   s * tex.x + c * tex.y \n\
+				) * u_value2;\n\
+				return (sin(point.x) * sin(point.y)) * 4.0;\n\
+			}\n\
+			void main() {\n\
+				vec4 color = texture2D(u_texture, v_coord);\n\
+				float average = (color.r + color.g + color.b) / 3.0;\n\
+				gl_FragColor = vec4(vec3(average * 10.0 - 5.0 + pattern()), color.a);\n\
+			}\n";
+
+        LGraphFXGeneric.pixel_shader_pixelate =
+            "precision highp float;\n\
+			varying vec2 v_coord;\n\
+			uniform sampler2D u_texture;\n\
+			uniform vec2 u_camera_planes;\n\
+			uniform vec2 u_size;\n\
+			uniform float u_value1;\n\
+			uniform float u_value2;\n\
+			\n\
+			void main() {\n\
+				vec2 coord = vec2( floor(v_coord.x * u_value1) / u_value1, floor(v_coord.y * u_value2) / u_value2 );\n\
+				vec4 color = texture2D(u_texture, coord);\n\
+				gl_FragColor = color;\n\
+			}\n";
+
+        LGraphFXGeneric.pixel_shader_lowpalette =
+            "precision highp float;\n\
+			varying vec2 v_coord;\n\
+			uniform sampler2D u_texture;\n\
+			uniform vec2 u_camera_planes;\n\
+			uniform vec2 u_size;\n\
+			uniform float u_value1;\n\
+			uniform float u_value2;\n\
+			\n\
+			void main() {\n\
+				vec4 color = texture2D(u_texture, v_coord);\n\
+				gl_FragColor = floor(color * u_value1) / u_value1;\n\
+			}\n";
+
+        LGraphFXGeneric.pixel_shader_noise =
+            "precision highp float;\n\
+			varying vec2 v_coord;\n\
+			uniform sampler2D u_texture;\n\
+			uniform sampler2D u_noise;\n\
+			uniform vec2 u_size;\n\
+			uniform float u_value1;\n\
+			uniform float u_value2;\n\
+			uniform vec2 u_rand;\n\
+			\n\
+			void main() {\n\
+				vec4 color = texture2D(u_texture, v_coord);\n\
+				vec3 noise = texture2D(u_noise, v_coord * vec2(u_size.x / 512.0, u_size.y / 512.0) + u_rand).xyz - vec3(0.5);\n\
+				gl_FragColor = vec4( color.xyz + noise * u_value1, color.a );\n\
+			}\n";
+
+        LGraphFXGeneric.pixel_shader_gamma =
+            "precision highp float;\n\
+			varying vec2 v_coord;\n\
+			uniform sampler2D u_texture;\n\
+			uniform float u_value1;\n\
+			\n\
+			void main() {\n\
+				vec4 color = texture2D(u_texture, v_coord);\n\
+				float gamma = 1.0 / u_value1;\n\
+				gl_FragColor = vec4( pow( color.xyz, vec3(gamma) ), color.a );\n\
+			}\n";
+
+        LiteGraph.registerNodeType("fx/generic", LGraphFXGeneric);
+        global.LGraphFXGeneric = LGraphFXGeneric;
+
+        // Vigneting ************************************
+
+        function LGraphFXVigneting() {
+            this.addInput("Tex.", "Texture");
+            this.addInput("intensity", "number");
+
+            this.addOutput("Texture", "Texture");
+            this.properties = {
+                intensity: 1,
+                invert: false,
+                precision: LGraphTexture.DEFAULT
+            };
+
+            if (!LGraphFXVigneting._shader) {
+                LGraphFXVigneting._shader = new GL.Shader(
+                    Shader.SCREEN_VERTEX_SHADER,
+                    LGraphFXVigneting.pixel_shader
+                );
+            }
+        }
+
+        LGraphFXVigneting.title = "Vigneting";
+        LGraphFXVigneting.desc = "Vigneting";
+
+        LGraphFXVigneting.widgets_info = {
+            precision: { widget: "combo", values: LGraphTexture.MODE_VALUES }
+        };
+
+        LGraphFXVigneting.prototype.onExecute = function() {
+            var tex = this.getInputData(0);
+
+            if (this.properties.precision === LGraphTexture.PASS_THROUGH) {
+                this.setOutputData(0, tex);
+                return;
+            }
+
+            if (!tex) {
+                return;
+            }
+
+            this._tex = LGraphTexture.getTargetTexture(
+                tex,
+                this._tex,
+                this.properties.precision
+            );
+
+            var intensity = this.properties.intensity;
+            if (this.isInputConnected(1)) {
+                intensity = this.getInputData(1);
+                this.properties.intensity = intensity;
+            }
+
+            gl.disable(gl.BLEND);
+            gl.disable(gl.DEPTH_TEST);
+
+            var mesh = Mesh.getScreenQuad();
+            var shader = LGraphFXVigneting._shader;
+            var invert = this.properties.invert;
+
+            this._tex.drawTo(function() {
+                tex.bind(0);
+                shader
+                    .uniforms({
+                        u_texture: 0,
+                        u_intensity: intensity,
+                        u_isize: [1 / tex.width, 1 / tex.height],
+                        u_invert: invert ? 1 : 0
+                    })
+                    .draw(mesh);
+            });
+
+            this.setOutputData(0, this._tex);
+        };
+
+        LGraphFXVigneting.pixel_shader =
+            "precision highp float;\n\
+			precision highp float;\n\
+			varying vec2 v_coord;\n\
+			uniform sampler2D u_texture;\n\
+			uniform float u_intensity;\n\
+			uniform int u_invert;\n\
+			\n\
+			void main() {\n\
+				float luminance = 1.0 - length( v_coord - vec2(0.5) ) * 1.414;\n\
+				vec4 color = texture2D(u_texture, v_coord);\n\
+				if(u_invert == 1)\n\
+					luminance = 1.0 - luminance;\n\
+				luminance = mix(1.0, luminance, u_intensity);\n\
+			   gl_FragColor = vec4( luminance * color.xyz, color.a);\n\
+			}\n\
+			";
+
+        LiteGraph.registerNodeType("fx/vigneting", LGraphFXVigneting);
+        global.LGraphFXVigneting = LGraphFXVigneting;
+    }
+})(this);
+
+(function(global) {
 
     if (typeof GL == "undefined")
 		return;
@@ -30311,791 +30375,899 @@ function LGraphGeometryDisplace() {
 })(this);
 (function(global) {
     var LiteGraph = global.LiteGraph;
-    var LGraphTexture = global.LGraphTexture;
 
-    //Works with Litegl.js to create WebGL nodes
-    if (typeof GL != "undefined") {
-        // Texture Lens *****************************************
-        function LGraphFXLens() {
-            this.addInput("Texture", "Texture");
-            this.addInput("Aberration", "number");
-            this.addInput("Distortion", "number");
-            this.addInput("Blur", "number");
-            this.addOutput("Texture", "Texture");
-            this.properties = {
-                aberration: 1.0,
-                distortion: 1.0,
-                blur: 1.0,
-                precision: LGraphTexture.DEFAULT
-            };
+    function GraphicsPlot() {
+        this.addInput("A", "Number");
+        this.addInput("B", "Number");
+        this.addInput("C", "Number");
+        this.addInput("D", "Number");
 
-            if (!LGraphFXLens._shader) {
-                LGraphFXLens._shader = new GL.Shader(
-                    GL.Shader.SCREEN_VERTEX_SHADER,
-                    LGraphFXLens.pixel_shader
-                );
-                LGraphFXLens._texture = new GL.Texture(3, 1, {
-                    format: gl.RGB,
-                    wrap: gl.CLAMP_TO_EDGE,
-                    magFilter: gl.LINEAR,
-                    minFilter: gl.LINEAR,
-                    pixel_data: [255, 0, 0, 0, 255, 0, 0, 0, 255]
-                });
-            }
+        this.values = [[], [], [], []];
+        this.properties = { scale: 2 };
+    }
+
+    GraphicsPlot.title = "Plot";
+    GraphicsPlot.desc = "Plots data over time";
+    GraphicsPlot.colors = ["#FFF", "#F99", "#9F9", "#99F"];
+
+    GraphicsPlot.prototype.onExecute = function(ctx) {
+        if (this.flags.collapsed) {
+            return;
         }
 
-        LGraphFXLens.title = "Lens";
-        LGraphFXLens.desc = "Camera Lens distortion";
-        LGraphFXLens.widgets_info = {
-            precision: { widget: "combo", values: LGraphTexture.MODE_VALUES }
+        var size = this.size;
+
+        for (var i = 0; i < 4; ++i) {
+            var v = this.getInputData(i);
+            if (v == null) {
+                continue;
+            }
+            var values = this.values[i];
+            values.push(v);
+            if (values.length > size[0]) {
+                values.shift();
+            }
+        }
+    };
+
+    GraphicsPlot.prototype.onDrawBackground = function(ctx) {
+        if (this.flags.collapsed) {
+            return;
+        }
+
+        var size = this.size;
+
+        var scale = (0.5 * size[1]) / this.properties.scale;
+        var colors = GraphicsPlot.colors;
+        var offset = size[1] * 0.5;
+
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, size[0], size[1]);
+        ctx.strokeStyle = "#555";
+        ctx.beginPath();
+        ctx.moveTo(0, offset);
+        ctx.lineTo(size[0], offset);
+        ctx.stroke();
+
+        if (this.inputs) {
+            for (var i = 0; i < 4; ++i) {
+                var values = this.values[i];
+                if (!this.inputs[i] || !this.inputs[i].link) {
+                    continue;
+                }
+                ctx.strokeStyle = colors[i];
+                ctx.beginPath();
+                var v = values[0] * scale * -1 + offset;
+                ctx.moveTo(0, clamp(v, 0, size[1]));
+                for (var j = 1; j < values.length && j < size[0]; ++j) {
+                    var v = values[j] * scale * -1 + offset;
+                    ctx.lineTo(j, clamp(v, 0, size[1]));
+                }
+                ctx.stroke();
+            }
+        }
+    };
+
+    LiteGraph.registerNodeType("graphics/plot", GraphicsPlot);
+
+    function GraphicsImage() {
+        this.addOutput("frame", "image");
+        this.properties = { url: "" };
+    }
+
+    GraphicsImage.title = "Image";
+    GraphicsImage.desc = "Image loader";
+    GraphicsImage.widgets = [{ name: "load", text: "Load", type: "button" }];
+
+    GraphicsImage.supported_extensions = ["jpg", "jpeg", "png", "gif"];
+
+    GraphicsImage.prototype.onAdded = function() {
+        if (this.properties["url"] != "" && this.img == null) {
+            this.loadImage(this.properties["url"]);
+        }
+    };
+
+    GraphicsImage.prototype.onDrawBackground = function(ctx) {
+        if (this.flags.collapsed) {
+            return;
+        }
+        if (this.img && this.size[0] > 5 && this.size[1] > 5 && this.img.width) {
+            ctx.drawImage(this.img, 0, 0, this.size[0], this.size[1]);
+        }
+    };
+
+    GraphicsImage.prototype.onExecute = function() {
+        if (!this.img) {
+            this.boxcolor = "#000";
+        }
+        if (this.img && this.img.width) {
+            this.setOutputData(0, this.img);
+        } else {
+            this.setOutputData(0, null);
+        }
+        if (this.img && this.img.dirty) {
+            this.img.dirty = false;
+        }
+    };
+
+    GraphicsImage.prototype.onPropertyChanged = function(name, value) {
+        this.properties[name] = value;
+        if (name == "url" && value != "") {
+            this.loadImage(value);
+        }
+
+        return true;
+    };
+
+    GraphicsImage.prototype.loadImage = function(url, callback) {
+        if (url == "") {
+            this.img = null;
+            return;
+        }
+
+        this.img = document.createElement("img");
+
+        if (url.substr(0, 4) == "http" && LiteGraph.proxy) {
+            url = LiteGraph.proxy + url.substr(url.indexOf(":") + 3);
+        }
+
+        this.img.src = url;
+        this.boxcolor = "#F95";
+        var that = this;
+        this.img.onload = function() {
+            if (callback) {
+                callback(this);
+            }
+            console.log( "Image loaded, size: " + that.img.width + "x" + that.img.height );
+            this.dirty = true;
+            that.boxcolor = "#9F9";
+            that.setDirtyCanvas(true);
         };
+        this.img.onerror = function() {
+			console.log("error loading the image:" + url);
+		}
+    };
 
-        LGraphFXLens.prototype.onExecute = function() {
-            var tex = this.getInputData(0);
-            if (this.properties.precision === LGraphTexture.PASS_THROUGH) {
-                this.setOutputData(0, tex);
-                return;
-            }
+    GraphicsImage.prototype.onWidget = function(e, widget) {
+        if (widget.name == "load") {
+            this.loadImage(this.properties["url"]);
+        }
+    };
 
-            if (!tex) {
-                return;
-            }
+    GraphicsImage.prototype.onDropFile = function(file) {
+        var that = this;
+        if (this._url) {
+            URL.revokeObjectURL(this._url);
+        }
+        this._url = URL.createObjectURL(file);
+        this.properties.url = this._url;
+        this.loadImage(this._url, function(img) {
+            that.size[1] = (img.height / img.width) * that.size[0];
+        });
+    };
 
-            this._tex = LGraphTexture.getTargetTexture(
-                tex,
-                this._tex,
-                this.properties.precision
-            );
+    LiteGraph.registerNodeType("graphics/image", GraphicsImage);
 
-            var aberration = this.properties.aberration;
-            if (this.isInputConnected(1)) {
-                aberration = this.getInputData(1);
-                this.properties.aberration = aberration;
-            }
-
-            var distortion = this.properties.distortion;
-            if (this.isInputConnected(2)) {
-                distortion = this.getInputData(2);
-                this.properties.distortion = distortion;
-            }
-
-            var blur = this.properties.blur;
-            if (this.isInputConnected(3)) {
-                blur = this.getInputData(3);
-                this.properties.blur = blur;
-            }
-
-            gl.disable(gl.BLEND);
-            gl.disable(gl.DEPTH_TEST);
-            var mesh = Mesh.getScreenQuad();
-            var shader = LGraphFXLens._shader;
-            //var camera = LS.Renderer._current_camera;
-
-            this._tex.drawTo(function() {
-                tex.bind(0);
-                shader
-                    .uniforms({
-                        u_texture: 0,
-                        u_aberration: aberration,
-                        u_distortion: distortion,
-                        u_blur: blur
-                    })
-                    .draw(mesh);
-            });
-
-            this.setOutputData(0, this._tex);
+    function ColorPalette() {
+        this.addInput("f", "number");
+        this.addOutput("Color", "color");
+        this.properties = {
+            colorA: "#444444",
+            colorB: "#44AAFF",
+            colorC: "#44FFAA",
+            colorD: "#FFFFFF"
         };
+    }
 
-        LGraphFXLens.pixel_shader =
-            "precision highp float;\n\
-			precision highp float;\n\
-			varying vec2 v_coord;\n\
-			uniform sampler2D u_texture;\n\
-			uniform vec2 u_camera_planes;\n\
-			uniform float u_aberration;\n\
-			uniform float u_distortion;\n\
-			uniform float u_blur;\n\
-			\n\
-			void main() {\n\
-				vec2 coord = v_coord;\n\
-				float dist = distance(vec2(0.5), coord);\n\
-				vec2 dist_coord = coord - vec2(0.5);\n\
-				float percent = 1.0 + ((0.5 - dist) / 0.5) * u_distortion;\n\
-				dist_coord *= percent;\n\
-				coord = dist_coord + vec2(0.5);\n\
-				vec4 color = texture2D(u_texture,coord, u_blur * dist);\n\
-				color.r = texture2D(u_texture,vec2(0.5) + dist_coord * (1.0+0.01*u_aberration), u_blur * dist ).r;\n\
-				color.b = texture2D(u_texture,vec2(0.5) + dist_coord * (1.0-0.01*u_aberration), u_blur * dist ).b;\n\
-				gl_FragColor = color;\n\
-			}\n\
-			";
+    ColorPalette.title = "Palette";
+    ColorPalette.desc = "Generates a color";
+
+    ColorPalette.prototype.onExecute = function() {
+        var c = [];
+
+        if (this.properties.colorA != null) {
+            c.push(hex2num(this.properties.colorA));
+        }
+        if (this.properties.colorB != null) {
+            c.push(hex2num(this.properties.colorB));
+        }
+        if (this.properties.colorC != null) {
+            c.push(hex2num(this.properties.colorC));
+        }
+        if (this.properties.colorD != null) {
+            c.push(hex2num(this.properties.colorD));
+        }
+
+        var f = this.getInputData(0);
+        if (f == null) {
+            f = 0.5;
+        }
+        if (f > 1.0) {
+            f = 1.0;
+        } else if (f < 0.0) {
+            f = 0.0;
+        }
+
+        if (c.length == 0) {
+            return;
+        }
+
+        var result = [0, 0, 0];
+        if (f == 0) {
+            result = c[0];
+        } else if (f == 1) {
+            result = c[c.length - 1];
+        } else {
+            var pos = (c.length - 1) * f;
+            var c1 = c[Math.floor(pos)];
+            var c2 = c[Math.floor(pos) + 1];
+            var t = pos - Math.floor(pos);
+            result[0] = c1[0] * (1 - t) + c2[0] * t;
+            result[1] = c1[1] * (1 - t) + c2[1] * t;
+            result[2] = c1[2] * (1 - t) + c2[2] * t;
+        }
+
         /*
-			float normalized_tunable_sigmoid(float xs, float k)\n\
-			{\n\
-				xs = xs * 2.0 - 1.0;\n\
-				float signx = sign(xs);\n\
-				float absx = abs(xs);\n\
-				return signx * ((-k - 1.0)*absx)/(2.0*(-2.0*k*absx+k-1.0)) + 0.5;\n\
-			}\n\
-		*/
+	c[0] = 1.0 - Math.abs( Math.sin( 0.1 * reModular.getTime() * Math.PI) );
+	c[1] = Math.abs( Math.sin( 0.07 * reModular.getTime() * Math.PI) );
+	c[2] = Math.abs( Math.sin( 0.01 * reModular.getTime() * Math.PI) );
+	*/
 
-        LiteGraph.registerNodeType("fx/lens", LGraphFXLens);
-        global.LGraphFXLens = LGraphFXLens;
+        for (var i=0; i < result.length; i++) {
+            result[i] /= 255;
+        }
 
-        /* not working yet
-	function LGraphDepthOfField()
-	{
-		this.addInput("Color","Texture");
-		this.addInput("Linear Depth","Texture");
-		this.addInput("Camera","camera");
-		this.addOutput("Texture","Texture");
-		this.properties = { high_precision: false };
-	}
+        this.boxcolor = colorToString(result);
+        this.setOutputData(0, result);
+    };
 
-	LGraphDepthOfField.title = "Depth Of Field";
-	LGraphDepthOfField.desc = "Applies a depth of field effect";
+    LiteGraph.registerNodeType("color/palette", ColorPalette);
 
-	LGraphDepthOfField.prototype.onExecute = function()
-	{
-		var tex = this.getInputData(0);
-		var depth = this.getInputData(1);
-		var camera = this.getInputData(2);
+    function ImageFrame() {
+        this.addInput("", "image,canvas");
+        this.size = [200, 200];
+    }
 
-		if(!tex || !depth || !camera) 
+    ImageFrame.title = "Frame";
+    ImageFrame.desc = "Frame viewerew";
+    ImageFrame.widgets = [
+        { name: "resize", text: "Resize box", type: "button" },
+        { name: "view", text: "View Image", type: "button" }
+    ];
+
+    ImageFrame.prototype.onDrawBackground = function(ctx) {
+        if (this.frame && !this.flags.collapsed) {
+            ctx.drawImage(this.frame, 0, 0, this.size[0], this.size[1]);
+        }
+    };
+
+    ImageFrame.prototype.onExecute = function() {
+        this.frame = this.getInputData(0);
+        this.setDirtyCanvas(true);
+    };
+
+    ImageFrame.prototype.onWidget = function(e, widget) {
+        if (widget.name == "resize" && this.frame) {
+            var width = this.frame.width;
+            var height = this.frame.height;
+
+            if (!width && this.frame.videoWidth != null) {
+                width = this.frame.videoWidth;
+                height = this.frame.videoHeight;
+            }
+
+            if (width && height) {
+                this.size = [width, height];
+            }
+            this.setDirtyCanvas(true, true);
+        } else if (widget.name == "view") {
+            this.show();
+        }
+    };
+
+    ImageFrame.prototype.show = function() {
+        //var str = this.canvas.toDataURL("image/png");
+        if (showElement && this.frame) {
+            showElement(this.frame);
+        }
+    };
+
+    LiteGraph.registerNodeType("graphics/frame", ImageFrame);
+
+    function ImageFade() {
+        this.addInputs([
+            ["img1", "image"],
+            ["img2", "image"],
+            ["fade", "number"]
+        ]);
+        this.addOutput("", "image");
+        this.properties = { fade: 0.5, width: 512, height: 512 };
+    }
+
+    ImageFade.title = "Image fade";
+    ImageFade.desc = "Fades between images";
+    ImageFade.widgets = [
+        { name: "resizeA", text: "Resize to A", type: "button" },
+        { name: "resizeB", text: "Resize to B", type: "button" }
+    ];
+
+    ImageFade.prototype.onAdded = function() {
+        this.createCanvas();
+        var ctx = this.canvas.getContext("2d");
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, this.properties["width"], this.properties["height"]);
+    };
+
+    ImageFade.prototype.createCanvas = function() {
+        this.canvas = document.createElement("canvas");
+        this.canvas.width = this.properties["width"];
+        this.canvas.height = this.properties["height"];
+    };
+
+    ImageFade.prototype.onExecute = function() {
+        var ctx = this.canvas.getContext("2d");
+        this.canvas.width = this.canvas.width;
+
+        var A = this.getInputData(0);
+        if (A != null) {
+            ctx.drawImage(A, 0, 0, this.canvas.width, this.canvas.height);
+        }
+
+        var fade = this.getInputData(2);
+        if (fade == null) {
+            fade = this.properties["fade"];
+        } else {
+            this.properties["fade"] = fade;
+        }
+
+        ctx.globalAlpha = fade;
+        var B = this.getInputData(1);
+        if (B != null) {
+            ctx.drawImage(B, 0, 0, this.canvas.width, this.canvas.height);
+        }
+        ctx.globalAlpha = 1.0;
+
+        this.setOutputData(0, this.canvas);
+        this.setDirtyCanvas(true);
+    };
+
+    LiteGraph.registerNodeType("graphics/imagefade", ImageFade);
+
+    function ImageCrop() {
+        this.addInput("", "image");
+        this.addOutput("", "image");
+        this.properties = { width: 256, height: 256, x: 0, y: 0, scale: 1.0 };
+        this.size = [50, 20];
+    }
+
+    ImageCrop.title = "Crop";
+    ImageCrop.desc = "Crop Image";
+
+    ImageCrop.prototype.onAdded = function() {
+        this.createCanvas();
+    };
+
+    ImageCrop.prototype.createCanvas = function() {
+        this.canvas = document.createElement("canvas");
+        this.canvas.width = this.properties["width"];
+        this.canvas.height = this.properties["height"];
+    };
+
+    ImageCrop.prototype.onExecute = function() {
+        var input = this.getInputData(0);
+        if (!input) {
+            return;
+        }
+
+        if (input.width) {
+            var ctx = this.canvas.getContext("2d");
+
+            ctx.drawImage(
+                input,
+                -this.properties["x"],
+                -this.properties["y"],
+                input.width * this.properties["scale"],
+                input.height * this.properties["scale"]
+            );
+            this.setOutputData(0, this.canvas);
+        } else {
+            this.setOutputData(0, null);
+        }
+    };
+
+    ImageCrop.prototype.onDrawBackground = function(ctx) {
+        if (this.flags.collapsed) {
+            return;
+        }
+        if (this.canvas) {
+            ctx.drawImage(
+                this.canvas,
+                0,
+                0,
+                this.canvas.width,
+                this.canvas.height,
+                0,
+                0,
+                this.size[0],
+                this.size[1]
+            );
+        }
+    };
+
+    ImageCrop.prototype.onPropertyChanged = function(name, value) {
+        this.properties[name] = value;
+
+        if (name == "scale") {
+            this.properties[name] = parseFloat(value);
+            if (this.properties[name] == 0) {
+                console.error("Error in scale");
+                this.properties[name] = 1.0;
+            }
+        } else {
+            this.properties[name] = parseInt(value);
+        }
+
+        this.createCanvas();
+
+        return true;
+    };
+
+    LiteGraph.registerNodeType("graphics/cropImage", ImageCrop);
+
+    //CANVAS stuff
+
+    function CanvasNode() {
+        this.addInput("clear", LiteGraph.ACTION);
+        this.addOutput("", "canvas");
+        this.properties = { width: 512, height: 512, autoclear: true };
+
+        this.canvas = document.createElement("canvas");
+        this.ctx = this.canvas.getContext("2d");
+    }
+
+    CanvasNode.title = "Canvas";
+    CanvasNode.desc = "Canvas to render stuff";
+
+    CanvasNode.prototype.onExecute = function() {
+        var canvas = this.canvas;
+        var w = this.properties.width | 0;
+        var h = this.properties.height | 0;
+        if (canvas.width != w) {
+            canvas.width = w;
+        }
+        if (canvas.height != h) {
+            canvas.height = h;
+        }
+
+        if (this.properties.autoclear) {
+            this.ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        this.setOutputData(0, canvas);
+    };
+
+    CanvasNode.prototype.onAction = function(action, param) {
+        if (action == "clear") {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+    };
+
+    LiteGraph.registerNodeType("graphics/canvas", CanvasNode);
+
+    function DrawImageNode() {
+        this.addInput("canvas", "canvas");
+        this.addInput("img", "image,canvas");
+        this.addInput("x", "number");
+        this.addInput("y", "number");
+        this.properties = { x: 0, y: 0, opacity: 1 };
+    }
+
+    DrawImageNode.title = "DrawImage";
+    DrawImageNode.desc = "Draws image into a canvas";
+
+    DrawImageNode.prototype.onExecute = function() {
+        var canvas = this.getInputData(0);
+        if (!canvas) {
+            return;
+        }
+
+        var img = this.getInputOrProperty("img");
+        if (!img) {
+            return;
+        }
+
+        var x = this.getInputOrProperty("x");
+        var y = this.getInputOrProperty("y");
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(img, x, y);
+    };
+
+    LiteGraph.registerNodeType("graphics/drawImage", DrawImageNode);
+
+    function DrawRectangleNode() {
+        this.addInput("canvas", "canvas");
+        this.addInput("x", "number");
+        this.addInput("y", "number");
+        this.addInput("w", "number");
+        this.addInput("h", "number");
+        this.properties = {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+            color: "white",
+            opacity: 1
+        };
+    }
+
+    DrawRectangleNode.title = "DrawRectangle";
+    DrawRectangleNode.desc = "Draws rectangle in canvas";
+
+    DrawRectangleNode.prototype.onExecute = function() {
+        var canvas = this.getInputData(0);
+        if (!canvas) {
+            return;
+        }
+
+        var x = this.getInputOrProperty("x");
+        var y = this.getInputOrProperty("y");
+        var w = this.getInputOrProperty("w");
+        var h = this.getInputOrProperty("h");
+        var ctx = canvas.getContext("2d");
+        ctx.fillRect(x, y, w, h);
+    };
+
+    LiteGraph.registerNodeType("graphics/drawRectangle", DrawRectangleNode);
+
+    function ImageVideo() {
+        this.addInput("t", "number");
+        this.addOutputs([["frame", "image"], ["t", "number"], ["d", "number"]]);
+        this.properties = { url: "", use_proxy: true };
+    }
+
+    ImageVideo.title = "Video";
+    ImageVideo.desc = "Video playback";
+    ImageVideo.widgets = [
+        { name: "play", text: "PLAY", type: "minibutton" },
+        { name: "stop", text: "STOP", type: "minibutton" },
+        { name: "demo", text: "Demo video", type: "button" },
+        { name: "mute", text: "Mute video", type: "button" }
+    ];
+
+    ImageVideo.prototype.onExecute = function() {
+        if (!this.properties.url) {
+            return;
+        }
+
+        if (this.properties.url != this._video_url) {
+            this.loadVideo(this.properties.url);
+        }
+
+        if (!this._video || this._video.width == 0) {
+            return;
+        }
+
+        var t = this.getInputData(0);
+        if (t && t >= 0 && t <= 1.0) {
+            this._video.currentTime = t * this._video.duration;
+            this._video.pause();
+        }
+
+        this._video.dirty = true;
+        this.setOutputData(0, this._video);
+        this.setOutputData(1, this._video.currentTime);
+        this.setOutputData(2, this._video.duration);
+        this.setDirtyCanvas(true);
+    };
+
+    ImageVideo.prototype.onStart = function() {
+        this.play();
+    };
+
+    ImageVideo.prototype.onStop = function() {
+        this.stop();
+    };
+
+    ImageVideo.prototype.loadVideo = function(url) {
+        this._video_url = url;
+
+		var pos = url.substr(0,10).indexOf(":");
+		var protocol = "";
+		if(pos != -1)
+			protocol = url.substr(0,pos);
+
+		var host = "";
+		if(protocol)
 		{
-			this.setOutputData(0, tex);
-			return;
+			host = url.substr(0,url.indexOf("/",protocol.length + 3));
+			host = host.substr(protocol.length+3);
 		}
 
-		var precision = gl.UNSIGNED_BYTE;
-		if(this.properties.high_precision)
-			precision = gl.half_float_ext ? gl.HALF_FLOAT_OES : gl.FLOAT;			
-		if(!this._temp_texture || this._temp_texture.type != precision ||
-			this._temp_texture.width != tex.width || this._temp_texture.height != tex.height)
-			this._temp_texture = new GL.Texture( tex.width, tex.height, { type: precision, format: gl.RGBA, filter: gl.LINEAR });
-
-		var shader = LGraphDepthOfField._shader = new GL.Shader( GL.Shader.SCREEN_VERTEX_SHADER, LGraphDepthOfField._pixel_shader );
-
-		var screen_mesh = Mesh.getScreenQuad();
-
-		gl.disable( gl.DEPTH_TEST );
-		gl.disable( gl.BLEND );
-
-		var camera_position = camera.getEye();
-		var focus_point = camera.getCenter();
-		var distance = vec3.distance( camera_position, focus_point );
-		var far = camera.far;
-		var focus_range = distance * 0.5;
-
-		this._temp_texture.drawTo( function() {
-			tex.bind(0);
-			depth.bind(1);
-			shader.uniforms({u_texture:0, u_depth_texture:1, u_resolution: [1/tex.width, 1/tex.height], u_far: far, u_focus_point: distance, u_focus_scale: focus_range }).draw(screen_mesh);
-		});
-
-		this.setOutputData(0, this._temp_texture);
-	}
-
-	//from http://tuxedolabs.blogspot.com.es/2018/05/bokeh-depth-of-field-in-single-pass.html
-	LGraphDepthOfField._pixel_shader = "\n\
-		precision highp float;\n\
-		varying vec2 v_coord;\n\
-		uniform sampler2D u_texture; //Image to be processed\n\
-		uniform sampler2D u_depth_texture; //Linear depth, where 1.0 == far plane\n\
-		uniform vec2 u_iresolution; //The size of a pixel: vec2(1.0/width, 1.0/height)\n\
-		uniform float u_far; // Far plane\n\
-		uniform float u_focus_point;\n\
-		uniform float u_focus_scale;\n\
-		\n\
-		const float GOLDEN_ANGLE = 2.39996323;\n\
-		const float MAX_BLUR_SIZE = 20.0;\n\
-		const float RAD_SCALE = 0.5; // Smaller = nicer blur, larger = faster\n\
-		\n\
-		float getBlurSize(float depth, float focusPoint, float focusScale)\n\
-		{\n\
-		 float coc = clamp((1.0 / focusPoint - 1.0 / depth)*focusScale, -1.0, 1.0);\n\
-		 return abs(coc) * MAX_BLUR_SIZE;\n\
-		}\n\
-		\n\
-		vec3 depthOfField(vec2 texCoord, float focusPoint, float focusScale)\n\
-		{\n\
-		 float centerDepth = texture2D(u_depth_texture, texCoord).r * u_far;\n\
-		 float centerSize = getBlurSize(centerDepth, focusPoint, focusScale);\n\
-		 vec3 color = texture2D(u_texture, v_coord).rgb;\n\
-		 float tot = 1.0;\n\
-		\n\
-		 float radius = RAD_SCALE;\n\
-		 for (float ang = 0.0; ang < 100.0; ang += GOLDEN_ANGLE)\n\
-		 {\n\
-		  vec2 tc = texCoord + vec2(cos(ang), sin(ang)) * u_iresolution * radius;\n\
-			\n\
-		  vec3 sampleColor = texture2D(u_texture, tc).rgb;\n\
-		  float sampleDepth = texture2D(u_depth_texture, tc).r * u_far;\n\
-		  float sampleSize = getBlurSize( sampleDepth, focusPoint, focusScale );\n\
-		  if (sampleDepth > centerDepth)\n\
-		   sampleSize = clamp(sampleSize, 0.0, centerSize*2.0);\n\
-			\n\
-		  float m = smoothstep(radius-0.5, radius+0.5, sampleSize);\n\
-		  color += mix(color/tot, sampleColor, m);\n\
-		  tot += 1.0;\n\
-		  radius += RAD_SCALE/radius;\n\
-		  if(radius>=MAX_BLUR_SIZE)\n\
-			 return color / tot;\n\
-		 }\n\
-		 return color / tot;\n\
-		}\n\
-		void main()\n\
-		{\n\
-			gl_FragColor = vec4( depthOfField( v_coord, u_focus_point, u_focus_scale ), 1.0 );\n\
-			//gl_FragColor = vec4( texture2D(u_depth_texture, v_coord).r );\n\
-		}\n\
-		";
-
-	LiteGraph.registerNodeType("fx/DOF", LGraphDepthOfField );
-	global.LGraphDepthOfField = LGraphDepthOfField;
-	*/
-
-        //*******************************************************
-
-        function LGraphFXBokeh() {
-            this.addInput("Texture", "Texture");
-            this.addInput("Blurred", "Texture");
-            this.addInput("Mask", "Texture");
-            this.addInput("Threshold", "number");
-            this.addOutput("Texture", "Texture");
-            this.properties = {
-                shape: "",
-                size: 10,
-                alpha: 1.0,
-                threshold: 1.0,
-                high_precision: false
-            };
-        }
-
-        LGraphFXBokeh.title = "Bokeh";
-        LGraphFXBokeh.desc = "applies an Bokeh effect";
-
-        LGraphFXBokeh.widgets_info = { shape: { widget: "texture" } };
-
-        LGraphFXBokeh.prototype.onExecute = function() {
-            var tex = this.getInputData(0);
-            var blurred_tex = this.getInputData(1);
-            var mask_tex = this.getInputData(2);
-            if (!tex || !mask_tex || !this.properties.shape) {
-                this.setOutputData(0, tex);
-                return;
-            }
-
-            if (!blurred_tex) {
-                blurred_tex = tex;
-            }
-
-            var shape_tex = LGraphTexture.getTexture(this.properties.shape);
-            if (!shape_tex) {
-                return;
-            }
-
-            var threshold = this.properties.threshold;
-            if (this.isInputConnected(3)) {
-                threshold = this.getInputData(3);
-                this.properties.threshold = threshold;
-            }
-
-            var precision = gl.UNSIGNED_BYTE;
-            if (this.properties.high_precision) {
-                precision = gl.half_float_ext ? gl.HALF_FLOAT_OES : gl.FLOAT;
-            }
-            if (
-                !this._temp_texture ||
-                this._temp_texture.type != precision ||
-                this._temp_texture.width != tex.width ||
-                this._temp_texture.height != tex.height
-            ) {
-                this._temp_texture = new GL.Texture(tex.width, tex.height, {
-                    type: precision,
-                    format: gl.RGBA,
-                    filter: gl.LINEAR
-                });
-            }
-
-            //iterations
-            var size = this.properties.size;
-
-            var first_shader = LGraphFXBokeh._first_shader;
-            if (!first_shader) {
-                first_shader = LGraphFXBokeh._first_shader = new GL.Shader(
-                    Shader.SCREEN_VERTEX_SHADER,
-                    LGraphFXBokeh._first_pixel_shader
-                );
-            }
-
-            var second_shader = LGraphFXBokeh._second_shader;
-            if (!second_shader) {
-                second_shader = LGraphFXBokeh._second_shader = new GL.Shader(
-                    LGraphFXBokeh._second_vertex_shader,
-                    LGraphFXBokeh._second_pixel_shader
-                );
-            }
-
-            var points_mesh = this._points_mesh;
-            if (
-                !points_mesh ||
-                points_mesh._width != tex.width ||
-                points_mesh._height != tex.height ||
-                points_mesh._spacing != 2
-            ) {
-                points_mesh = this.createPointsMesh(tex.width, tex.height, 2);
-            }
-
-            var screen_mesh = Mesh.getScreenQuad();
-
-            var point_size = this.properties.size;
-            var min_light = this.properties.min_light;
-            var alpha = this.properties.alpha;
-
-            gl.disable(gl.DEPTH_TEST);
-            gl.disable(gl.BLEND);
-
-            this._temp_texture.drawTo(function() {
-                tex.bind(0);
-                blurred_tex.bind(1);
-                mask_tex.bind(2);
-                first_shader
-                    .uniforms({
-                        u_texture: 0,
-                        u_texture_blur: 1,
-                        u_mask: 2,
-                        u_texsize: [tex.width, tex.height]
-                    })
-                    .draw(screen_mesh);
-            });
-
-            this._temp_texture.drawTo(function() {
-                //clear because we use blending
-                //gl.clearColor(0.0,0.0,0.0,1.0);
-                //gl.clear( gl.COLOR_BUFFER_BIT );
-                gl.enable(gl.BLEND);
-                gl.blendFunc(gl.ONE, gl.ONE);
-
-                tex.bind(0);
-                shape_tex.bind(3);
-                second_shader
-                    .uniforms({
-                        u_texture: 0,
-                        u_mask: 2,
-                        u_shape: 3,
-                        u_alpha: alpha,
-                        u_threshold: threshold,
-                        u_pointSize: point_size,
-                        u_itexsize: [1.0 / tex.width, 1.0 / tex.height]
-                    })
-                    .draw(points_mesh, gl.POINTS);
-            });
-
-            this.setOutputData(0, this._temp_texture);
-        };
-
-        LGraphFXBokeh.prototype.createPointsMesh = function(
-            width,
-            height,
-            spacing
+        if (
+            this.properties.use_proxy &&
+            protocol &&
+            LiteGraph.proxy &&
+			host != location.host
         ) {
-            var nwidth = Math.round(width / spacing);
-            var nheight = Math.round(height / spacing);
+            url = LiteGraph.proxy + url.substr(url.indexOf(":") + 3);
+        }
 
-            var vertices = new Float32Array(nwidth * nheight * 2);
+        this._video = document.createElement("video");
+        this._video.src = url;
+        this._video.type = "type=video/mp4";
 
-            var ny = -1;
-            var dx = (2 / width) * spacing;
-            var dy = (2 / height) * spacing;
-            for (var y = 0; y < nheight; ++y) {
-                var nx = -1;
-                for (var x = 0; x < nwidth; ++x) {
-                    var pos = y * nwidth * 2 + x * 2;
-                    vertices[pos] = nx;
-                    vertices[pos + 1] = ny;
-                    nx += dx;
+        this._video.muted = true;
+        this._video.autoplay = true;
+
+        var that = this;
+        this._video.addEventListener("loadedmetadata", function(e) {
+            //onload
+            console.log("Duration: " + this.duration + " seconds");
+            console.log("Size: " + this.videoWidth + "," + this.videoHeight);
+            that.setDirtyCanvas(true);
+            this.width = this.videoWidth;
+            this.height = this.videoHeight;
+        });
+        this._video.addEventListener("progress", function(e) {
+            //onload
+            console.log("video loading...");
+        });
+        this._video.addEventListener("error", function(e) {
+            console.error("Error loading video: " + this.src);
+            if (this.error) {
+                switch (this.error.code) {
+                    case this.error.MEDIA_ERR_ABORTED:
+                        console.error("You stopped the video.");
+                        break;
+                    case this.error.MEDIA_ERR_NETWORK:
+                        console.error("Network error - please try again later.");
+                        break;
+                    case this.error.MEDIA_ERR_DECODE:
+                        console.error("Video is broken..");
+                        break;
+                    case this.error.MEDIA_ERR_SRC_NOT_SUPPORTED:
+                        console.error("Sorry, your browser can't play this video.");
+                        break;
                 }
-                ny += dy;
             }
+        });
 
-            this._points_mesh = GL.Mesh.load({ vertices2D: vertices });
-            this._points_mesh._width = width;
-            this._points_mesh._height = height;
-            this._points_mesh._spacing = spacing;
+        this._video.addEventListener("ended", function(e) {
+            console.log("Video Ended.");
+            this.play(); //loop
+        });
 
-            return this._points_mesh;
-        };
+        //document.body.appendChild(this.video);
+    };
 
+    ImageVideo.prototype.onPropertyChanged = function(name, value) {
+        this.properties[name] = value;
+        if (name == "url" && value != "") {
+            this.loadVideo(value);
+        }
+
+        return true;
+    };
+
+    ImageVideo.prototype.play = function() {
+        if (this._video && this._video.videoWidth ) { //is loaded
+            this._video.play();
+        }
+    };
+
+    ImageVideo.prototype.playPause = function() {
+        if (!this._video) {
+            return;
+        }
+        if (this._video.paused) {
+            this.play();
+        } else {
+            this.pause();
+        }
+    };
+
+    ImageVideo.prototype.stop = function() {
+        if (!this._video) {
+            return;
+        }
+        this._video.pause();
+        this._video.currentTime = 0;
+    };
+
+    ImageVideo.prototype.pause = function() {
+        if (!this._video) {
+            return;
+        }
+        console.log("Video paused");
+        this._video.pause();
+    };
+
+    ImageVideo.prototype.onWidget = function(e, widget) {
         /*
-	LGraphTextureBokeh._pixel_shader = "precision highp float;\n\
-			varying vec2 a_coord;\n\
-			uniform sampler2D u_texture;\n\
-			uniform sampler2D u_shape;\n\
-			\n\
-			void main() {\n\
-				vec4 color = texture2D( u_texture, gl_PointCoord );\n\
-				color *= v_color * u_alpha;\n\
-				gl_FragColor = color;\n\
-			}\n";
+	if(widget.name == "demo")
+	{
+		this.loadVideo();
+	}
+	else if(widget.name == "play")
+	{
+		if(this._video)
+			this.playPause();
+	}
+	if(widget.name == "stop")
+	{
+		this.stop();
+	}
+	else if(widget.name == "mute")
+	{
+		if(this._video)
+			this._video.muted = !this._video.muted;
+	}
 	*/
+    };
 
-        LGraphFXBokeh._first_pixel_shader =
-            "precision highp float;\n\
-			precision highp float;\n\
-			varying vec2 v_coord;\n\
-			uniform sampler2D u_texture;\n\
-			uniform sampler2D u_texture_blur;\n\
-			uniform sampler2D u_mask;\n\
-			\n\
-			void main() {\n\
-				vec4 color = texture2D(u_texture, v_coord);\n\
-				vec4 blurred_color = texture2D(u_texture_blur, v_coord);\n\
-				float mask = texture2D(u_mask, v_coord).x;\n\
-			   gl_FragColor = mix(color, blurred_color, mask);\n\
-			}\n\
-			";
+    LiteGraph.registerNodeType("graphics/video", ImageVideo);
 
-        LGraphFXBokeh._second_vertex_shader =
-            "precision highp float;\n\
-			attribute vec2 a_vertex2D;\n\
-			varying vec4 v_color;\n\
-			uniform sampler2D u_texture;\n\
-			uniform sampler2D u_mask;\n\
-			uniform vec2 u_itexsize;\n\
-			uniform float u_pointSize;\n\
-			uniform float u_threshold;\n\
-			void main() {\n\
-				vec2 coord = a_vertex2D * 0.5 + 0.5;\n\
-				v_color = texture2D( u_texture, coord );\n\
-				v_color += texture2D( u_texture, coord + vec2(u_itexsize.x, 0.0) );\n\
-				v_color += texture2D( u_texture, coord + vec2(0.0, u_itexsize.y));\n\
-				v_color += texture2D( u_texture, coord + u_itexsize);\n\
-				v_color *= 0.25;\n\
-				float mask = texture2D(u_mask, coord).x;\n\
-				float luminance = length(v_color) * mask;\n\
-				/*luminance /= (u_pointSize*u_pointSize)*0.01 */;\n\
-				luminance -= u_threshold;\n\
-				if(luminance < 0.0)\n\
-				{\n\
-					gl_Position.x = -100.0;\n\
-					return;\n\
-				}\n\
-				gl_PointSize = u_pointSize;\n\
-				gl_Position = vec4(a_vertex2D,0.0,1.0);\n\
-			}\n\
-			";
-
-        LGraphFXBokeh._second_pixel_shader =
-            "precision highp float;\n\
-			varying vec4 v_color;\n\
-			uniform sampler2D u_shape;\n\
-			uniform float u_alpha;\n\
-			\n\
-			void main() {\n\
-				vec4 color = texture2D( u_shape, gl_PointCoord );\n\
-				color *= v_color * u_alpha;\n\
-				gl_FragColor = color;\n\
-			}\n";
-
-        LiteGraph.registerNodeType("fx/bokeh", LGraphFXBokeh);
-        global.LGraphFXBokeh = LGraphFXBokeh;
-
-        //************************************************
-
-        function LGraphFXGeneric() {
-            this.addInput("Texture", "Texture");
-            this.addInput("value1", "number");
-            this.addInput("value2", "number");
-            this.addOutput("Texture", "Texture");
-            this.properties = {
-                fx: "halftone",
-                value1: 1,
-                value2: 1,
-                precision: LGraphTexture.DEFAULT
-            };
-        }
-
-        LGraphFXGeneric.title = "FX";
-        LGraphFXGeneric.desc = "applies an FX from a list";
-
-        LGraphFXGeneric.widgets_info = {
-            fx: {
-                widget: "combo",
-                values: ["halftone", "pixelate", "lowpalette", "noise", "gamma"]
-            },
-            precision: { widget: "combo", values: LGraphTexture.MODE_VALUES }
-        };
-        LGraphFXGeneric.shaders = {};
-
-        LGraphFXGeneric.prototype.onExecute = function() {
-            if (!this.isOutputConnected(0)) {
-                return;
-            } //saves work
-
-            var tex = this.getInputData(0);
-            if (this.properties.precision === LGraphTexture.PASS_THROUGH) {
-                this.setOutputData(0, tex);
-                return;
-            }
-
-            if (!tex) {
-                return;
-            }
-
-            this._tex = LGraphTexture.getTargetTexture(
-                tex,
-                this._tex,
-                this.properties.precision
-            );
-
-            //iterations
-            var value1 = this.properties.value1;
-            if (this.isInputConnected(1)) {
-                value1 = this.getInputData(1);
-                this.properties.value1 = value1;
-            }
-
-            var value2 = this.properties.value2;
-            if (this.isInputConnected(2)) {
-                value2 = this.getInputData(2);
-                this.properties.value2 = value2;
-            }
-
-            var fx = this.properties.fx;
-            var shader = LGraphFXGeneric.shaders[fx];
-            if (!shader) {
-                var pixel_shader_code = LGraphFXGeneric["pixel_shader_" + fx];
-                if (!pixel_shader_code) {
-                    return;
-                }
-
-                shader = LGraphFXGeneric.shaders[fx] = new GL.Shader(
-                    Shader.SCREEN_VERTEX_SHADER,
-                    pixel_shader_code
-                );
-            }
-
-            gl.disable(gl.BLEND);
-            gl.disable(gl.DEPTH_TEST);
-            var mesh = Mesh.getScreenQuad();
-            var camera = global.LS ? LS.Renderer._current_camera : null;
-            var camera_planes;
-            if (camera) {
-                camera_planes = [
-                    LS.Renderer._current_camera.near,
-                    LS.Renderer._current_camera.far
-                ];
-            } else {
-                camera_planes = [1, 100];
-            }
-
-            var noise = null;
-            if (fx == "noise") {
-                noise = LGraphTexture.getNoiseTexture();
-            }
-
-            this._tex.drawTo(function() {
-                tex.bind(0);
-                if (fx == "noise") {
-                    noise.bind(1);
-                }
-
-                shader
-                    .uniforms({
-                        u_texture: 0,
-                        u_noise: 1,
-                        u_size: [tex.width, tex.height],
-                        u_rand: [Math.random(), Math.random()],
-                        u_value1: value1,
-                        u_value2: value2,
-                        u_camera_planes: camera_planes
-                    })
-                    .draw(mesh);
-            });
-
-            this.setOutputData(0, this._tex);
-        };
-
-        LGraphFXGeneric.pixel_shader_halftone =
-            "precision highp float;\n\
-			varying vec2 v_coord;\n\
-			uniform sampler2D u_texture;\n\
-			uniform vec2 u_camera_planes;\n\
-			uniform vec2 u_size;\n\
-			uniform float u_value1;\n\
-			uniform float u_value2;\n\
-			\n\
-			float pattern() {\n\
-				float s = sin(u_value1 * 3.1415), c = cos(u_value1 * 3.1415);\n\
-				vec2 tex = v_coord * u_size.xy;\n\
-				vec2 point = vec2(\n\
-				   c * tex.x - s * tex.y ,\n\
-				   s * tex.x + c * tex.y \n\
-				) * u_value2;\n\
-				return (sin(point.x) * sin(point.y)) * 4.0;\n\
-			}\n\
-			void main() {\n\
-				vec4 color = texture2D(u_texture, v_coord);\n\
-				float average = (color.r + color.g + color.b) / 3.0;\n\
-				gl_FragColor = vec4(vec3(average * 10.0 - 5.0 + pattern()), color.a);\n\
-			}\n";
-
-        LGraphFXGeneric.pixel_shader_pixelate =
-            "precision highp float;\n\
-			varying vec2 v_coord;\n\
-			uniform sampler2D u_texture;\n\
-			uniform vec2 u_camera_planes;\n\
-			uniform vec2 u_size;\n\
-			uniform float u_value1;\n\
-			uniform float u_value2;\n\
-			\n\
-			void main() {\n\
-				vec2 coord = vec2( floor(v_coord.x * u_value1) / u_value1, floor(v_coord.y * u_value2) / u_value2 );\n\
-				vec4 color = texture2D(u_texture, coord);\n\
-				gl_FragColor = color;\n\
-			}\n";
-
-        LGraphFXGeneric.pixel_shader_lowpalette =
-            "precision highp float;\n\
-			varying vec2 v_coord;\n\
-			uniform sampler2D u_texture;\n\
-			uniform vec2 u_camera_planes;\n\
-			uniform vec2 u_size;\n\
-			uniform float u_value1;\n\
-			uniform float u_value2;\n\
-			\n\
-			void main() {\n\
-				vec4 color = texture2D(u_texture, v_coord);\n\
-				gl_FragColor = floor(color * u_value1) / u_value1;\n\
-			}\n";
-
-        LGraphFXGeneric.pixel_shader_noise =
-            "precision highp float;\n\
-			varying vec2 v_coord;\n\
-			uniform sampler2D u_texture;\n\
-			uniform sampler2D u_noise;\n\
-			uniform vec2 u_size;\n\
-			uniform float u_value1;\n\
-			uniform float u_value2;\n\
-			uniform vec2 u_rand;\n\
-			\n\
-			void main() {\n\
-				vec4 color = texture2D(u_texture, v_coord);\n\
-				vec3 noise = texture2D(u_noise, v_coord * vec2(u_size.x / 512.0, u_size.y / 512.0) + u_rand).xyz - vec3(0.5);\n\
-				gl_FragColor = vec4( color.xyz + noise * u_value1, color.a );\n\
-			}\n";
-
-        LGraphFXGeneric.pixel_shader_gamma =
-            "precision highp float;\n\
-			varying vec2 v_coord;\n\
-			uniform sampler2D u_texture;\n\
-			uniform float u_value1;\n\
-			\n\
-			void main() {\n\
-				vec4 color = texture2D(u_texture, v_coord);\n\
-				float gamma = 1.0 / u_value1;\n\
-				gl_FragColor = vec4( pow( color.xyz, vec3(gamma) ), color.a );\n\
-			}\n";
-
-        LiteGraph.registerNodeType("fx/generic", LGraphFXGeneric);
-        global.LGraphFXGeneric = LGraphFXGeneric;
-
-        // Vigneting ************************************
-
-        function LGraphFXVigneting() {
-            this.addInput("Tex.", "Texture");
-            this.addInput("intensity", "number");
-
-            this.addOutput("Texture", "Texture");
-            this.properties = {
-                intensity: 1,
-                invert: false,
-                precision: LGraphTexture.DEFAULT
-            };
-
-            if (!LGraphFXVigneting._shader) {
-                LGraphFXVigneting._shader = new GL.Shader(
-                    Shader.SCREEN_VERTEX_SHADER,
-                    LGraphFXVigneting.pixel_shader
-                );
-            }
-        }
-
-        LGraphFXVigneting.title = "Vigneting";
-        LGraphFXVigneting.desc = "Vigneting";
-
-        LGraphFXVigneting.widgets_info = {
-            precision: { widget: "combo", values: LGraphTexture.MODE_VALUES }
-        };
-
-        LGraphFXVigneting.prototype.onExecute = function() {
-            var tex = this.getInputData(0);
-
-            if (this.properties.precision === LGraphTexture.PASS_THROUGH) {
-                this.setOutputData(0, tex);
-                return;
-            }
-
-            if (!tex) {
-                return;
-            }
-
-            this._tex = LGraphTexture.getTargetTexture(
-                tex,
-                this._tex,
-                this.properties.precision
-            );
-
-            var intensity = this.properties.intensity;
-            if (this.isInputConnected(1)) {
-                intensity = this.getInputData(1);
-                this.properties.intensity = intensity;
-            }
-
-            gl.disable(gl.BLEND);
-            gl.disable(gl.DEPTH_TEST);
-
-            var mesh = Mesh.getScreenQuad();
-            var shader = LGraphFXVigneting._shader;
-            var invert = this.properties.invert;
-
-            this._tex.drawTo(function() {
-                tex.bind(0);
-                shader
-                    .uniforms({
-                        u_texture: 0,
-                        u_intensity: intensity,
-                        u_isize: [1 / tex.width, 1 / tex.height],
-                        u_invert: invert ? 1 : 0
-                    })
-                    .draw(mesh);
-            });
-
-            this.setOutputData(0, this._tex);
-        };
-
-        LGraphFXVigneting.pixel_shader =
-            "precision highp float;\n\
-			precision highp float;\n\
-			varying vec2 v_coord;\n\
-			uniform sampler2D u_texture;\n\
-			uniform float u_intensity;\n\
-			uniform int u_invert;\n\
-			\n\
-			void main() {\n\
-				float luminance = 1.0 - length( v_coord - vec2(0.5) ) * 1.414;\n\
-				vec4 color = texture2D(u_texture, v_coord);\n\
-				if(u_invert == 1)\n\
-					luminance = 1.0 - luminance;\n\
-				luminance = mix(1.0, luminance, u_intensity);\n\
-			   gl_FragColor = vec4( luminance * color.xyz, color.a);\n\
-			}\n\
-			";
-
-        LiteGraph.registerNodeType("fx/vigneting", LGraphFXVigneting);
-        global.LGraphFXVigneting = LGraphFXVigneting;
+    // Texture Webcam *****************************************
+    function ImageWebcam() {
+        this.addOutput("Webcam", "image");
+        this.properties = { filterFacingMode: false, facingMode: "user" };
+        this.boxcolor = "black";
+        this.frame = 0;
     }
+
+    ImageWebcam.title = "Webcam";
+    ImageWebcam.desc = "Webcam image";
+    ImageWebcam.is_webcam_open = false;
+
+    ImageWebcam.prototype.openStream = function() {
+        if (!navigator.mediaDevices.getUserMedia) {
+            console.log('getUserMedia() is not supported in your browser, use chrome and enable WebRTC from about://flags');
+            return;
+        }
+
+        this._waiting_confirmation = true;
+
+        // Not showing vendor prefixes.
+        var constraints = {
+            audio: false,
+            video: !this.properties.filterFacingMode ? true : { facingMode: this.properties.facingMode }
+        };
+        navigator.mediaDevices
+            .getUserMedia(constraints)
+            .then(this.streamReady.bind(this))
+            .catch(onFailSoHard);
+
+        var that = this;
+        function onFailSoHard(e) {
+            console.log("Webcam rejected", e);
+            that._webcam_stream = false;
+            ImageWebcam.is_webcam_open = false;
+            that.boxcolor = "red";
+            that.trigger("stream_error");
+        }
+    };
+
+    ImageWebcam.prototype.closeStream = function() {
+        if (this._webcam_stream) {
+            var tracks = this._webcam_stream.getTracks();
+            if (tracks.length) {
+                for (var i = 0; i < tracks.length; ++i) {
+                    tracks[i].stop();
+                }
+            }
+            ImageWebcam.is_webcam_open = false;
+            this._webcam_stream = null;
+            this._video = null;
+            this.boxcolor = "black";
+            this.trigger("stream_closed");
+        }
+    };
+
+    ImageWebcam.prototype.onPropertyChanged = function(name, value) {
+        if (name == "facingMode") {
+            this.properties.facingMode = value;
+            this.closeStream();
+            this.openStream();
+        }
+    };
+
+    ImageWebcam.prototype.onRemoved = function() {
+        this.closeStream();
+    };
+
+    ImageWebcam.prototype.streamReady = function(localMediaStream) {
+        this._webcam_stream = localMediaStream;
+        //this._waiting_confirmation = false;
+        this.boxcolor = "green";
+
+        var video = this._video;
+        if (!video) {
+            video = document.createElement("video");
+            video.autoplay = true;
+            video.srcObject = localMediaStream;
+            this._video = video;
+            //document.body.appendChild( video ); //debug
+            //when video info is loaded (size and so)
+            video.onloadedmetadata = function(e) {
+                // Ready to go. Do some stuff.
+                console.log(e);
+                ImageWebcam.is_webcam_open = true;
+            };
+        }
+
+        this.trigger("stream_ready", video);
+    };
+
+    ImageWebcam.prototype.onExecute = function() {
+        if (this._webcam_stream == null && !this._waiting_confirmation) {
+            this.openStream();
+        }
+
+        if (!this._video || !this._video.videoWidth) {
+            return;
+        }
+
+        this._video.frame = ++this.frame;
+        this._video.width = this._video.videoWidth;
+        this._video.height = this._video.videoHeight;
+        this.setOutputData(0, this._video);
+        for (var i = 1; i < this.outputs.length; ++i) {
+            if (!this.outputs[i]) {
+                continue;
+            }
+            switch (this.outputs[i].name) {
+                case "width":
+                    this.setOutputData(i, this._video.videoWidth);
+                    break;
+                case "height":
+                    this.setOutputData(i, this._video.videoHeight);
+                    break;
+            }
+        }
+    };
+
+    ImageWebcam.prototype.getExtraMenuOptions = function(graphcanvas) {
+        var that = this;
+        var txt = !that.properties.show ? "Show Frame" : "Hide Frame";
+        return [
+            {
+                content: txt,
+                callback: function() {
+                    that.properties.show = !that.properties.show;
+                }
+            }
+        ];
+    };
+
+    ImageWebcam.prototype.onDrawBackground = function(ctx) {
+        if (
+            this.flags.collapsed ||
+            this.size[1] <= 20 ||
+            !this.properties.show
+        ) {
+            return;
+        }
+
+        if (!this._video) {
+            return;
+        }
+
+        //render to graph canvas
+        ctx.save();
+        ctx.drawImage(this._video, 0, 0, this.size[0], this.size[1]);
+        ctx.restore();
+    };
+
+    ImageWebcam.prototype.onGetOutputs = function() {
+        return [
+            ["width", "number"],
+            ["height", "number"],
+            ["stream_ready", LiteGraph.EVENT],
+            ["stream_closed", LiteGraph.EVENT],
+            ["stream_error", LiteGraph.EVENT]
+        ];
+    };
+
+    LiteGraph.registerNodeType("graphics/webcam", ImageWebcam);
 })(this);
 
 (function(global) {
@@ -34571,3 +34743,40 @@ LiteGraph.registerNodeType("network/httprequest", HTTPRequestNode);
 	
 })(this);
 
+(function(global) {
+    var LiteGraph = global.LiteGraph;
+    
+    /* in types :: run in console :: var s=""; LiteGraph.slot_types_in.forEach(function(el){s+=el+"\n";}); console.log(s); */
+    
+    if(typeof LiteGraph.slot_types_default_in == "undefined") LiteGraph.slot_types_default_in = {}; //[];
+    LiteGraph.slot_types_default_in["_event_"] = "widget/button";
+    LiteGraph.slot_types_default_in["array"] = "basic/array";
+    LiteGraph.slot_types_default_in["boolean"] = "basic/boolean";
+    LiteGraph.slot_types_default_in["number"] = "widget/number";
+    LiteGraph.slot_types_default_in["object"] = "basic/data";
+    LiteGraph.slot_types_default_in["string"] = ["basic/string","string/concatenate"];
+    LiteGraph.slot_types_default_in["vec2"] = "math3d/xy-to-vec2";
+    LiteGraph.slot_types_default_in["vec3"] = "math3d/xyz-to-vec3";
+    LiteGraph.slot_types_default_in["vec4"] = "math3d/xyzw-to-vec4";
+    
+    /* out types :: run in console :: var s=""; LiteGraph.slot_types_out.forEach(function(el){s+=el+"\n";}); console.log(s); */
+    if(typeof LiteGraph.slot_types_default_out == "undefined") LiteGraph.slot_types_default_out = {};
+    LiteGraph.slot_types_default_out["_event_"] = ["logic/IF","events/sequencer","events/log","events/counter"];
+    LiteGraph.slot_types_default_out["array"] = ["basic/watch","basic/set_array","basic/array[]"];
+    LiteGraph.slot_types_default_out["boolean"] = ["logic/IF","basic/watch","math/branch","math/gate"];
+    LiteGraph.slot_types_default_out["number"] = ["basic/watch"
+												  ,{node:"math/operation",properties:{OP:"*"},title:"A*B"}
+												  ,{node:"math/operation",properties:{OP:"/"},title:"A/B"}
+												  ,{node:"math/operation",properties:{OP:"+"},title:"A+B"}
+												  ,{node:"math/operation",properties:{OP:"-"},title:"A-B"}
+												  ,{node:"math/compare",outputs:[["A==B", "boolean"]],title:"A==B"}
+												  ,{node:"math/compare",outputs:[["A>B", "boolean"]],title:"A>B"}
+												  ,{node:"math/compare",outputs:[["A<B", "boolean"]],title:"A<B"}
+												];
+    LiteGraph.slot_types_default_out["object"] = ["basic/object_property","basic/keys",["string/toString","basic/watch"]];
+    LiteGraph.slot_types_default_out["string"] = ["basic/watch","string/compare","string/concatenate","string/contains"];
+    LiteGraph.slot_types_default_out["vec2"] = "math3d/vec2-to-xy";
+    LiteGraph.slot_types_default_out["vec3"] = "math3d/vec3-to-xyz";
+    LiteGraph.slot_types_default_out["vec4"] = "math3d/vec4-to-xyzw";
+    
+})(this);

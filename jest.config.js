@@ -159,9 +159,12 @@ module.exports = {
   // ],
 
   // An array of regexp pattern strings that are matched against all test paths, matched tests are skipped
-  // testPathIgnorePatterns: [
-  //   "/node_modules/"
-  // ],
+  // react-demo is covered by vitest (`npm test` inside react-demo); its JSX/ESM
+  // tests are not meant to run under this jest config.
+  testPathIgnorePatterns: [
+    "/node_modules/",
+    "<rootDir>/react-demo/"
+  ],
 
   // The regexp pattern or array of patterns that Jest uses to detect test files
   // testRegex: [],
