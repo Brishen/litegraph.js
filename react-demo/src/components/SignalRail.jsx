@@ -121,7 +121,7 @@ function Stat({ label, value }) {
     );
 }
 
-export default function SignalRail({ stats, meterLabel, readSignal }) {
+export default function SignalRail({ stats, meterLabel, readSignal, flash }) {
     return (
         <footer className="signal-rail">
             <span className={"run-state" + (stats.running ? " run-state--live" : "")}>
@@ -130,6 +130,12 @@ export default function SignalRail({ stats, meterLabel, readSignal }) {
             </span>
 
             <Meter read={readSignal} label={meterLabel} />
+
+            {/* Keyboard edits change the graph with nothing under the cursor to
+                show for it, so the last one is announced here. */}
+            <span className="flash" role="status" aria-live="polite">
+                {flash || ""}
+            </span>
 
             <div className="stats">
                 <Stat label="nodes" value={stats.nodes} />

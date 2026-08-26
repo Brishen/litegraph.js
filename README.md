@@ -164,8 +164,9 @@ canvases can render the same graph in different skins at the same time.
 
 `react-demo` is a full node editor built on the wrapper: a searchable palette of
 every registered node type, drag-and-drop placement, a live inspector, six example
-patches, six custom nodes, JSON import/export, and a split view that renders one
-running graph through two themes at once.
+patches, six custom nodes, JSON import/export, cut/copy/paste/duplicate/undo on the
+usual keys, and a split view that renders one running graph through two themes at
+once. Press `?` in the app for the keymap.
 
 ![The bench](imgs/react-bench.png)
 

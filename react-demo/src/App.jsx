@@ -6,6 +6,7 @@ import EditorCanvas from "./components/EditorCanvas.jsx";
 import Inspector from "./components/Inspector.jsx";
 import JsonPanel from "./components/JsonPanel.jsx";
 import NodePalette from "./components/NodePalette.jsx";
+import ShortcutsPanel from "./components/ShortcutsPanel.jsx";
 import SignalRail from "./components/SignalRail.jsx";
 import Toolbar from "./components/Toolbar.jsx";
 
@@ -24,6 +25,24 @@ import {
     savePatch,
     viewportCenter,
 } from "./graphTools.js";
+import {
+    GraphHistory,
+    copySelection,
+    cutSelection,
+    deleteSelection,
+    deselectAll,
+    duplicateSelection,
+    nudgeSelection,
+    pasteClipboard,
+    selectAll,
+} from "./editing.js";
+import {
+    NUDGE_STEP,
+    NUDGE_STEP_LARGE,
+    NUDGE_VECTORS,
+    isTypingTarget,
+    matchShortcut,
+} from "./shortcuts.js";
 
 const MemoPalette = memo(NodePalette);
 const MemoToolbar = memo(Toolbar);
@@ -37,6 +56,9 @@ export default function App() {
     const selectedRef = useRef(null);
     const runningRef = useRef(true);
     const exampleRef = useRef(DEFAULT_EXAMPLE_ID);
+    const historyRef = useRef(null);
+    const flashTimerRef = useRef(0);
+    const pointerOverStageRef = useRef(false);
 
     const [themeId, setThemeId] = useState(DEFAULT_THEME_ID);
     const [splitThemeId, setSplitThemeId] = useState(DEFAULT_SPLIT_THEME_ID);
@@ -45,6 +67,8 @@ export default function App() {
     const [selected, setSelected] = useState(null);
     const [running, setRunning] = useState(true);
     const [jsonOpen, setJsonOpen] = useState(false);
+    const [helpOpen, setHelpOpen] = useState(false);
+    const [flash, setFlash] = useState(null);
     const [, setTick] = useState(0);
 
     const theme = getTheme(themeId);
@@ -55,6 +79,24 @@ export default function App() {
     exampleRef.current = exampleId;
 
     const refresh = useCallback(() => setTick((value) => value + 1), []);
+
+    // Keyboard edits have no visible target, so say what happened.
+    const announce = useCallback((message) => {
+        setFlash(message);
+        window.clearTimeout(flashTimerRef.current);
+        flashTimerRef.current = window.setTimeout(() => setFlash(null), 1800);
+    }, []);
+
+    // For edits this app makes itself. LiteGraph's own edits - dragging a node,
+    // wiring two slots - come back through graph.onAfterChange instead.
+    const commit = useCallback(() => {
+        if (historyRef.current) {
+            historyRef.current.record();
+        }
+        refresh();
+    }, [refresh]);
+
+    useEffect(() => () => window.clearTimeout(flashTimerRef.current), []);
 
     /* ------------------------------------------------------------- lifecycle */
 
@@ -71,6 +113,19 @@ export default function App() {
             };
 
             loadExample(graph, exampleRef.current);
+
+            historyRef.current = new GraphHistory(graph);
+            // Everything LiteGraph changes on its own - a dragged node, a new
+            // wire, a delete from its context menu - lands here, which is what
+            // makes those edits undoable without wrapping any of them.
+            graph.onAfterChange = () => {
+                if (!historyRef.current) {
+                    return;
+                }
+                historyRef.current.recordSoon();
+                refresh();
+            };
+
             // The wrapper starts the graph right after this callback returns, so
             // there is nothing to start here - just line the view up on the patch.
             requestAnimationFrame(() => fitToGraph(canvas));
@@ -184,9 +239,9 @@ export default function App() {
                 graph.start();
             }
             fit();
-            refresh();
+            commit();
         },
-        [fit, refresh]
+        [commit, fit]
     );
 
     const clearGraph = useCallback(() => {
@@ -199,8 +254,8 @@ export default function App() {
         if (runningRef.current) {
             graph.start();
         }
-        refresh();
-    }, [refresh]);
+        commit();
+    }, [commit]);
 
     const addFromPalette = useCallback(
         (type) => {
@@ -213,9 +268,9 @@ export default function App() {
             // Stagger repeat clicks so nodes do not stack in one spot.
             const drift = (graph._nodes.length % 6) * 24;
             addNode(graph, canvas, type, [center[0] - 90 + drift, center[1] - 40 + drift]);
-            refresh();
+            commit();
         },
-        [refresh]
+        [commit]
     );
 
     const dropFromPalette = useCallback(
@@ -225,9 +280,9 @@ export default function App() {
                 return;
             }
             addNode(graph, canvasRef.current, type, pos);
-            refresh();
+            commit();
         },
-        [refresh]
+        [commit]
     );
 
     const removeSelected = useCallback(() => {
@@ -237,8 +292,8 @@ export default function App() {
         }
         graph.remove(selectedRef.current);
         setSelected(null);
-        refresh();
-    }, [refresh]);
+        commit();
+    }, [commit]);
 
     const centerSelected = useCallback(() => {
         if (canvasRef.current && selectedRef.current) {
@@ -250,8 +305,8 @@ export default function App() {
         if (graphRef.current) {
             graphRef.current.setDirtyCanvas(true, true);
         }
-        refresh();
-    }, [refresh]);
+        commit();
+    }, [commit]);
 
     const afterImport = useCallback(() => {
         const graph = graphRef.current;
@@ -263,36 +318,199 @@ export default function App() {
             graph.start();
         }
         fit();
+        commit();
+    }, [commit, fit]);
+
+    /* ----------------------------------------------------------- edit actions */
+
+    const countLabel = (verb, count) =>
+        verb + " " + count + (count === 1 ? " node" : " nodes");
+
+    const doDelete = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) {
+            return;
+        }
+        const count = deleteSelection(canvas);
+        if (!count) {
+            announce("Nothing selected");
+            return;
+        }
+        // deleteSelectedNodes empties the selection without telling anyone.
+        setSelected(null);
+        announce(countLabel("Deleted", count));
+        commit();
+    }, [announce, commit]);
+
+    const doCopy = useCallback(() => {
+        const count = copySelection(canvasRef.current);
+        announce(count ? countLabel("Copied", count) : "Nothing selected");
+    }, [announce]);
+
+    const doCut = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) {
+            return;
+        }
+        const count = cutSelection(canvas);
+        if (!count) {
+            announce("Nothing selected");
+            return;
+        }
+        setSelected(null);
+        announce(countLabel("Cut", count));
+        commit();
+    }, [announce, commit]);
+
+    const doPaste = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) {
+            return;
+        }
+        // Paste under the pointer when it is over the canvas, which is what
+        // graph_mouse already holds; otherwise drop it in the middle of the view.
+        const pos = pointerOverStageRef.current ? null : viewportCenter(canvas);
+        const count = pasteClipboard(canvas, pos);
+        announce(count ? countLabel("Pasted", count) : "Clipboard is empty");
+        if (count) {
+            commit();
+        }
+    }, [announce, commit]);
+
+    const doDuplicate = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) {
+            return;
+        }
+        const count = duplicateSelection(canvas);
+        announce(count ? countLabel("Duplicated", count) : "Nothing selected");
+        if (count) {
+            commit();
+        }
+    }, [announce, commit]);
+
+    const doSelectAll = useCallback(() => {
+        const count = selectAll(canvasRef.current);
+        announce(count ? countLabel("Selected", count) : "Nothing to select");
         refresh();
-    }, [fit, refresh]);
+    }, [announce, refresh]);
+
+    const doDeselect = useCallback(() => {
+        deselectAll(canvasRef.current);
+        setSelected(null);
+        refresh();
+    }, [refresh]);
+
+    const doNudge = useCallback(
+        (key, large) => {
+            const vector = NUDGE_VECTORS[key];
+            if (!vector) {
+                return;
+            }
+            const distance = large ? NUDGE_STEP_LARGE : NUDGE_STEP;
+            if (nudgeSelection(canvasRef.current, vector[0] * distance, vector[1] * distance)) {
+                commit();
+            }
+        },
+        [commit]
+    );
+
+    // Undo and redo replace the graph contents wholesale, so the current
+    // selection points at nodes that no longer exist.
+    const afterTimeTravel = useCallback(() => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+            canvas.deselectAllNodes();
+        }
+        setSelected(null);
+        if (runningRef.current && graphRef.current) {
+            graphRef.current.start();
+        }
+        refresh();
+    }, [refresh]);
+
+    const doUndo = useCallback(() => {
+        const history = historyRef.current;
+        if (!history || !history.undo()) {
+            announce("Nothing to undo");
+            return;
+        }
+        afterTimeTravel();
+        announce("Undo");
+    }, [afterTimeTravel, announce]);
+
+    const doRedo = useCallback(() => {
+        const history = historyRef.current;
+        if (!history || !history.redo()) {
+            announce("Nothing to redo");
+            return;
+        }
+        afterTimeTravel();
+        announce("Redo");
+    }, [afterTimeTravel, announce]);
+
+    const doSave = useCallback(() => {
+        if (!graphRef.current) {
+            return;
+        }
+        announce(savePatch(graphRef.current) ? "Saved in this browser" : "Could not save");
+    }, [announce]);
 
     /* ------------------------------------------------------------- shortcuts */
 
-    useEffect(() => {
-        const onKey = (event) => {
-            const target = event.target;
-            const typing =
-                target &&
-                (target.tagName === "INPUT" ||
-                    target.tagName === "TEXTAREA" ||
-                    target.tagName === "SELECT" ||
-                    target.isContentEditable);
-            if (typing || event.metaKey || event.ctrlKey || event.altKey) {
+    const actions = useRef({});
+    actions.current = {
+        delete: doDelete,
+        cut: doCut,
+        copy: doCopy,
+        paste: doPaste,
+        duplicate: doDuplicate,
+        undo: doUndo,
+        redo: doRedo,
+        selectAll: doSelectAll,
+        deselect: () => {
+            if (helpOpen) {
+                setHelpOpen(false);
                 return;
             }
-            if (event.key === "r") {
-                toggleRun();
-            } else if (event.key === "s") {
-                step();
-            } else if (event.key === "f") {
-                fit();
-            } else if (event.key === "j") {
-                setJsonOpen((open) => !open);
+            doDeselect();
+        },
+        run: toggleRun,
+        step,
+        fit,
+        save: doSave,
+        json: () => setJsonOpen((open) => !open),
+        help: () => setHelpOpen((open) => !open),
+    };
+
+    useEffect(() => {
+        // Capture phase, on the window: LiteGraph binds its own keydown handler to
+        // the canvas element and implements some of these itself. Getting there
+        // first and stopping the event keeps every shortcut on one implementation
+        // instead of two that fire together.
+        const onKey = (event) => {
+            if (isTypingTarget(event.target) || event.altKey) {
+                return;
             }
+            const shortcut = matchShortcut(event);
+            if (!shortcut) {
+                return;
+            }
+            if (shortcut.id === "nudge") {
+                doNudge(event.key, event.shiftKey);
+            } else {
+                const action = actions.current[shortcut.id];
+                if (!action) {
+                    return;
+                }
+                action();
+            }
+            event.preventDefault();
+            event.stopPropagation();
         };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [fit, step, toggleRun]);
+        window.addEventListener("keydown", onKey, true);
+        return () => window.removeEventListener("keydown", onKey, true);
+    }, [doNudge]);
 
     /* ---------------------------------------------------------------- render */
 
@@ -333,12 +551,25 @@ export default function App() {
                 onClear={clearGraph}
                 jsonOpen={jsonOpen}
                 onToggleJson={() => setJsonOpen((open) => !open)}
+                onUndo={doUndo}
+                onRedo={doRedo}
+                canUndo={Boolean(historyRef.current && historyRef.current.canUndo)}
+                canRedo={Boolean(historyRef.current && historyRef.current.canRedo)}
+                onHelp={() => setHelpOpen(true)}
             />
 
             <main className="bench__body" data-json={jsonOpen ? "open" : "closed"}>
                 <MemoPalette onAdd={addFromPalette} />
 
-                <div className={"stage" + (split ? " stage--split" : "")}>
+                <div
+                    className={"stage" + (split ? " stage--split" : "")}
+                    onMouseEnter={() => {
+                        pointerOverStageRef.current = true;
+                    }}
+                    onMouseLeave={() => {
+                        pointerOverStageRef.current = false;
+                    }}
+                >
                     <EditorCanvas
                         theme={theme.canvas}
                         label={split ? theme.label : null}
@@ -371,7 +602,14 @@ export default function App() {
                 )}
             </main>
 
-            <SignalRail stats={stats} meterLabel={meterLabel} readSignal={readSignal} />
+            <SignalRail
+                stats={stats}
+                meterLabel={meterLabel}
+                readSignal={readSignal}
+                flash={flash}
+            />
+
+            {helpOpen ? <ShortcutsPanel onClose={() => setHelpOpen(false)} /> : null}
         </div>
     );
 }
