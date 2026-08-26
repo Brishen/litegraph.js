@@ -15,6 +15,8 @@ const WAVEFORMS = ["sine", "square", "saw", "triangle"];
 function palette(graphcanvas) {
     const theme = (graphcanvas && graphcanvas.theme) || LiteGraph;
     return {
+        // The node's own body colour, for painting over something already drawn.
+        body: theme.NODE_DEFAULT_BGCOLOR || "#353535",
         bg: theme.WIDGET_BGCOLOR || "#222",
         line: theme.WIDGET_OUTLINE_COLOR || "#666",
         text: theme.WIDGET_TEXT_COLOR || "#ddd",
@@ -108,6 +110,11 @@ Scope.prototype.onDrawBackground = function (ctx, graphcanvas) {
     const h = this.size[1] - 60;
     const x = 8;
     const y = 46;
+    if (w < 16 || h < 12) {
+        // Squeezed below the slot and widget rows: a plot here would draw
+        // upwards, outside the node.
+        return;
+    }
     const range = this.properties.range || 1;
 
     ctx.fillStyle = colors.bg;
@@ -151,15 +158,58 @@ Scope.prototype.onDrawBackground = function (ctx, graphcanvas) {
 
 /* ---------------------------------------------------------------------- gauge */
 
+// The dial is an arc open at the bottom: it starts below the horizontal on the
+// left, sweeps over the top, and ends the same distance below on the right.
+const GAUGE_START = Math.PI * 0.85;
+const GAUGE_END = Math.PI * 2.15;
+// How far past the centre the open ends reach, as a fraction of the radius. The
+// arc is therefore (1 + FOOT) radii tall, not 2 - the layout below needs this to
+// size a dial that actually fits inside the node.
+const GAUGE_FOOT = Math.sin(GAUGE_START);
+// Plus a little more for the readout tucked into the opening.
+const GAUGE_HEIGHT = 1 + GAUGE_FOOT + 0.14;
+const GAUGE_PAD = 10;
+const GAUGE_TRACK_MAX = 8;
+
 function Gauge() {
     this.addInput("value", "number");
     this.properties = { min: -1, max: 1, label: "" };
-    this.size = [170, 130];
+    this.size = [180, 150];
     this._value = 0;
 }
 
 Gauge.title = "Gauge";
 Gauge.desc = "Dial readout for a single number";
+
+/** Where the node body is free to draw, below the slot rows. */
+Gauge.prototype.contentTop = function () {
+    const rows = Math.max(
+        this.inputs ? this.inputs.length : 0,
+        this.outputs ? this.outputs.length : 0
+    );
+    return rows * LiteGraph.NODE_SLOT_HEIGHT + 8;
+};
+
+/**
+ * Dial geometry for the node's current size. Kept separate from the drawing so a
+ * test can check that nothing lands outside the node at any size.
+ */
+Gauge.prototype.layout = function () {
+    const top = this.contentTop();
+    const availableWidth = this.size[0] - GAUGE_PAD * 2;
+    const availableHeight = this.size[1] - top - GAUGE_PAD;
+    // The stroked track straddles the radius, so leave room for its outer half.
+    const outer = Math.max(0, Math.min(availableWidth / 2, availableHeight / GAUGE_HEIGHT));
+    const radius = Math.max(0, outer - GAUGE_TRACK_MAX / 2);
+    return {
+        top,
+        radius,
+        cx: this.size[0] / 2,
+        cy: top + outer,
+        // Too small to be a dial: draw a bare readout instead.
+        tiny: radius < 24,
+    };
+};
 
 Gauge.prototype.onExecute = function () {
     const value = this.getInputData(0);
@@ -173,44 +223,108 @@ Gauge.prototype.onDrawBackground = function (ctx, graphcanvas) {
         return;
     }
     const colors = palette(graphcanvas);
-    const cx = this.size[0] * 0.5;
-    const cy = this.size[1] - 24;
-    const radius = Math.min(this.size[0] * 0.38, this.size[1] * 0.55);
+    const { cx, cy, radius, top, tiny } = this.layout();
     const min = this.properties.min;
     const max = this.properties.max;
     const span = max - min || 1;
     const ratio = Math.max(0, Math.min(1, (this._value - min) / span));
-    const start = Math.PI * 0.85;
-    const end = Math.PI * 2.15;
+    const angle = GAUGE_START + (GAUGE_END - GAUGE_START) * ratio;
+    const reading = this._value.toFixed(2);
 
-    ctx.lineWidth = 6;
+    ctx.textAlign = "center";
+
+    if (tiny) {
+        // Not enough room for a dial once the node is squeezed; keep the number,
+        // shrunk to whatever is left, and drop even that if there is no room.
+        const available = this.size[1] - top - 4;
+        if (available >= 9) {
+            const size = Math.max(7, Math.min(13, available * 0.75));
+            ctx.fillStyle = colors.text;
+            ctx.font = Math.round(size) + "px monospace";
+            ctx.fillText(reading, this.size[0] / 2, top + available / 2 + size * 0.35);
+        }
+        ctx.textAlign = "left";
+        return;
+    }
+
+    const track = Math.max(4, Math.min(GAUGE_TRACK_MAX, radius * 0.14));
+    ctx.lineWidth = track;
+    ctx.lineCap = "round";
+
     ctx.strokeStyle = colors.line;
     ctx.beginPath();
-    ctx.arc(cx, cy, radius, start, end);
+    ctx.arc(cx, cy, radius, GAUGE_START, GAUGE_END);
     ctx.stroke();
 
-    ctx.strokeStyle = colors.accent;
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, start, start + (end - start) * ratio);
-    ctx.stroke();
+    if (ratio > 0) {
+        ctx.strokeStyle = colors.accent;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, GAUGE_START, angle);
+        ctx.stroke();
+    }
+    ctx.lineCap = "butt";
 
-    const angle = start + (end - start) * ratio;
+    // Needle, from the edge of its hub so the pivot stays readable.
+    const hub = Math.max(2.5, radius * 0.07);
     ctx.strokeStyle = colors.text;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = Math.max(1.5, radius * 0.03);
     ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(cx + Math.cos(angle) * (radius - 6), cy + Math.sin(angle) * (radius - 6));
+    ctx.moveTo(cx + Math.cos(angle) * hub, cy + Math.sin(angle) * hub);
+    ctx.lineTo(
+        cx + Math.cos(angle) * (radius - track),
+        cy + Math.sin(angle) * (radius - track)
+    );
     ctx.stroke();
 
     ctx.fillStyle = colors.text;
-    ctx.font = "12px monospace";
-    ctx.textAlign = "center";
-    ctx.fillText(this._value.toFixed(2), cx, cy + 16);
+    ctx.beginPath();
+    ctx.arc(cx, cy, hub, 0, Math.PI * 2);
+    ctx.fill();
+
+    // The ends of the scale, so the reading has something to mean. Below this
+    // radius they crowd the reading, and a cramped dial is worse than a bare one.
+    if (radius >= 52) {
+        // Just past each end of the arc: on the arc's own rays they would sit
+        // directly under the needle whenever the value is at that end.
+        const tick = radius * 0.94;
+        const spread = 0.14;
+        ctx.fillStyle = colors.dim;
+        ctx.font = Math.round(Math.max(8, radius * 0.15)) + "px monospace";
+        ctx.fillText(
+            String(min),
+            cx + Math.cos(GAUGE_START - spread) * tick,
+            cy + Math.sin(GAUGE_START - spread) * tick
+        );
+        ctx.fillText(
+            String(max),
+            cx + Math.cos(GAUGE_END + spread) * tick,
+            cy + Math.sin(GAUGE_END + spread) * tick
+        );
+    }
+
+    // Near either end of the scale the needle sweeps down through the readout, so
+    // the number sits on a chip of the node's own colour and stays legible.
+    const readingSize = Math.round(Math.max(10, Math.min(15, radius * 0.26)));
+    const readingY = cy + radius * 0.34;
+    ctx.font = readingSize + "px monospace";
+    const readingWidth = ctx.measureText(reading).width;
+    ctx.fillStyle = colors.body;
+    ctx.fillRect(
+        cx - readingWidth / 2 - 4,
+        readingY - readingSize,
+        readingWidth + 8,
+        readingSize + 5
+    );
+
+    ctx.fillStyle = colors.text;
+    ctx.fillText(reading, cx, readingY);
+
     if (this.properties.label) {
         ctx.fillStyle = colors.dim;
-        ctx.font = "9px monospace";
-        ctx.fillText(this.properties.label.toUpperCase(), cx, cy + 28);
+        ctx.font = Math.round(Math.max(8, radius * 0.16)) + "px monospace";
+        ctx.fillText(this.properties.label.toUpperCase(), cx, cy + radius * 0.56);
     }
+
     ctx.textAlign = "left";
 };
 
@@ -255,6 +369,9 @@ Swatch.prototype.onDrawBackground = function (ctx, graphcanvas) {
     const y = 62;
     const w = this.size[0] - 16;
     const h = this.size[1] - y - 8;
+    if (w < 12 || h < 6) {
+        return;
+    }
     ctx.fillStyle = this._hex;
     ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = colors.line;
@@ -324,23 +441,36 @@ Note.prototype.onDrawBackground = function (ctx, graphcanvas) {
     const colors = palette(graphcanvas);
     const words = String(this.properties.text || "").split(/\s+/);
     const maxWidth = this.size[0] - 20;
+    const lineHeight = 16;
+    // Stop before the text walks off the bottom of the node; a note is resizable
+    // and its text is user-supplied, so it will not always fit.
+    const lastBaseline = this.size[1] - 6;
     ctx.font = "12px sans-serif";
     ctx.fillStyle = colors.text;
 
+    const lines = [];
     let line = "";
-    let y = 24;
     for (const word of words) {
         const candidate = line ? line + " " + word : word;
         if (ctx.measureText(candidate).width > maxWidth && line) {
-            ctx.fillText(line, 10, y);
+            lines.push(line);
             line = word;
-            y += 16;
         } else {
             line = candidate;
         }
     }
     if (line) {
-        ctx.fillText(line, 10, y);
+        lines.push(line);
+    }
+
+    let y = 24;
+    for (let i = 0; i < lines.length; i++) {
+        if (y > lastBaseline) {
+            return;
+        }
+        const isLastThatFits = y + lineHeight > lastBaseline && i < lines.length - 1;
+        ctx.fillText(isLastThatFits ? lines[i] + " …" : lines[i], 10, y);
+        y += lineHeight;
     }
 };
 
