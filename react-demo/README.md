@@ -25,6 +25,8 @@ Or, from this folder: `npm install && npm run dev`.
 | Reading the node registry for a palette | `src/demoSetup.js` |
 | Selection, live values, property editing | `src/components/Inspector.jsx` |
 | Serialising, importing, browser storage | `src/graphTools.js`, `src/components/JsonPanel.jsx` |
+| Clipboard, delete, duplicate, undo/redo | `src/editing.js` |
+| The keymap, and the sheet that documents it | `src/shortcuts.js` |
 
 ## Using it
 
@@ -39,7 +41,38 @@ Or, from this folder: `npm install && npm run dev`.
 - **Export** from the JSON drawer. A graph is plain JSON: download it, paste it
   back, or keep it in the browser between sessions.
 
-Keyboard: `r` run/pause, `s` step, `f` fit, `j` JSON drawer.
+## Keyboard
+
+Press `?` for the list in the app. It is generated from `src/shortcuts.js`, so it
+cannot drift from what the handler actually does.
+
+![Shortcuts](../imgs/react-bench-keys.png)
+
+| | |
+| --- | --- |
+| `Del` / `Backspace` | Delete the selected nodes |
+| `Ctrl/⌘ X` `C` `V` | Cut, copy, paste - paste lands under the pointer |
+| `Ctrl/⌘ D` | Duplicate in place |
+| `Ctrl/⌘ Z` / `Ctrl/⌘ Shift Z` | Undo / redo |
+| `Ctrl/⌘ A` / `Esc` | Select everything / deselect |
+| Arrows, `Shift` + arrows | Nudge the selection by 1 or 10 |
+| `R` `S` `F` `J` | Run/pause, step, fit, JSON drawer |
+| `Ctrl/⌘ S` | Save the patch in this browser |
+
+Two details worth copying if you build your own editor:
+
+- The handler listens on `window` **in the capture phase**. LiteGraph binds its own
+  `keydown` to the canvas element and implements delete, select-all, copy and
+  paste itself, so anything that reaches it fires twice - a Ctrl+V would paste two
+  copies. Getting there first and calling `stopPropagation` for handled keys keeps
+  one implementation. Unhandled keys still reach the canvas, so hold-space to pan
+  and per-node `onKeyDown` keep working.
+- Undo snapshots the serialised graph and is driven by `graph.onAfterChange`,
+  which means edits made *through the canvas* - dragging a node, drawing a wire,
+  deleting from the context menu - are undoable without wrapping any of them.
+  LiteGraph fires that callback several times for one logical edit, so records are
+  coalesced to the end of the task; otherwise deleting three nodes would take
+  three presses to take back.
 
 ## The custom nodes
 

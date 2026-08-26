@@ -1,3 +1,5 @@
+import { IS_MAC, MOD_LABEL } from "../shortcuts.js";
+
 export default function Toolbar({
     examples,
     exampleId,
@@ -16,6 +18,11 @@ export default function Toolbar({
     onClear,
     jsonOpen,
     onToggleJson,
+    onUndo,
+    onRedo,
+    canUndo,
+    canRedo,
+    onHelp,
 }) {
     const example = examples.find((item) => item.id === exampleId) || examples[0];
 
@@ -65,6 +72,25 @@ export default function Toolbar({
                 </button>
             </div>
 
+            <div className="toolbar__group">
+                <button
+                    type="button"
+                    onClick={onUndo}
+                    disabled={!canUndo}
+                    title={"Undo (" + MOD_LABEL + (IS_MAC ? "Z" : " + Z") + ")"}
+                >
+                    Undo
+                </button>
+                <button
+                    type="button"
+                    onClick={onRedo}
+                    disabled={!canRedo}
+                    title={"Redo (" + MOD_LABEL + (IS_MAC ? "⇧Z" : " + Shift + Z") + ")"}
+                >
+                    Redo
+                </button>
+            </div>
+
             <div className="toolbar__group toolbar__group--right">
                 <label className="field">
                     <span className="eyebrow eyebrow--sub">Theme</span>
@@ -110,6 +136,10 @@ export default function Toolbar({
                     title="Open the serialisation drawer (j)"
                 >
                     JSON
+                </button>
+
+                <button type="button" onClick={onHelp} title="Keyboard shortcuts (?)">
+                    Keys
                 </button>
             </div>
         </header>
