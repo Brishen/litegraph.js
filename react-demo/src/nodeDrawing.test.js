@@ -190,3 +190,101 @@ describe("the other drawing nodes stay inside themselves", () => {
         expect(box.bottom).toBeLessThanOrEqual(size[1] + 0.5);
     });
 });
+
+describe("nothing draws over a slot row", () => {
+    /** The vertical band a node's slot dots and labels occupy. */
+    function slotRows(node) {
+        const rows = Math.max(
+            node.inputs ? node.inputs.length : 0,
+            node.outputs ? node.outputs.length : 0
+        );
+        return rows * LiteGraph.NODE_SLOT_HEIGHT;
+    }
+
+    function build(type, size, prepare) {
+        const graph = new LGraph();
+        const created = LiteGraph.createNode(type);
+        graph.add(created);
+        if (size) {
+            created.size[0] = size[0];
+            created.size[1] = size[1];
+        }
+        if (prepare) {
+            prepare(created);
+        }
+        return created;
+    }
+
+    const white = (node) => {
+        node.setProperty("r", 1);
+        node.setProperty("g", 1);
+        node.setProperty("b", 1);
+        node.onExecute();
+    };
+
+    it("the swatch keeps its hex below the r/g/b inputs", () => {
+        const swatch = build("demo/swatch", null, white);
+        const ctx = recordingContext();
+        swatch.onDrawBackground(ctx, THEME);
+        const box = ctx.bounds();
+
+        expect(box.top).toBeGreaterThanOrEqual(slotRows(swatch));
+        expect(box.bottom).toBeLessThanOrEqual(swatch.size[1] + 0.5);
+    });
+
+    it("the swatch writes its hex in ink that survives the colour", () => {
+        const light = build("demo/swatch", null, white);
+        const dark = build("demo/swatch", null, (node) => {
+            node.setProperty("r", 0);
+            node.setProperty("g", 0);
+            node.setProperty("b", 0);
+            node.onExecute();
+        });
+        expect(light.inkColor()).toBe("#101010");
+        expect(dark.inkColor()).toBe("#f4f4f4");
+    });
+
+    it("the swatch drops the hex rather than spilling out of a small chip", () => {
+        const swatch = build("demo/swatch", [90, 80], (node) => node.onExecute());
+        const ctx = recordingContext();
+        swatch.onDrawBackground(ctx, THEME);
+        const box = ctx.bounds();
+        if (box) {
+            expect(box.bottom).toBeLessThanOrEqual(80.5);
+        }
+    });
+
+    it("the slider bar stops before its output slot", () => {
+        const slider = build("widget/hslider", null, (node) => {
+            node.value = 1; // full travel, the worst case
+        });
+        const ctx = recordingContext();
+        slider.onDrawForeground(ctx, THEME);
+        const box = ctx.bounds();
+
+        // The slot dot is centred half a slot height in from the right edge.
+        const dotLeft = slider.size[0] - LiteGraph.NODE_SLOT_HEIGHT * 0.5 - 4;
+        expect(box.right).toBeLessThan(dotLeft);
+    });
+
+    it("the progress bar starts after its input slot", () => {
+        const progress = build("widget/progress", null, (node) => {
+            node.setProperty("value", 1);
+        });
+        const ctx = recordingContext();
+        progress.onDrawForeground(ctx, THEME);
+        const box = ctx.bounds();
+
+        const dotRight = LiteGraph.NODE_SLOT_HEIGHT * 0.5 + 4;
+        expect(box.left).toBeGreaterThan(dotRight);
+    });
+
+    it("a full slider still fills most of its node", () => {
+        const slider = build("widget/hslider", null, (node) => {
+            node.value = 1;
+        });
+        const track = slider.getTrack();
+        expect(track.width).toBeGreaterThan(slider.size[0] * 0.6);
+        expect(track.x + track.width).toBeLessThanOrEqual(slider.size[0]);
+    });
+});

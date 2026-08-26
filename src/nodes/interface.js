@@ -525,6 +525,19 @@
     WidgetHSlider.title = "H.Slider";
     WidgetHSlider.desc = "Linear slider controller";
 
+    //the bar used to be drawn across the whole body, which put it underneath the
+    //output slot's dot and label; keep that end of the node clear
+    WidgetHSlider.prototype.getTrack = function() {
+        var reserved =
+            this.outputs && this.outputs.length ? LiteGraph.NODE_SLOT_HEIGHT : 0;
+        return {
+            x: 4,
+            y: 4,
+            width: Math.max(8, this.size[0] - 8 - reserved),
+            height: Math.max(4, this.size[1] - 8)
+        };
+    };
+
     WidgetHSlider.prototype.onDrawForeground = function(ctx) {
         if (this.value == -1) {
             this.value =
@@ -532,15 +545,17 @@
                 (this.properties.max - this.properties.min);
         }
 
+        var track = this.getTrack();
+
         //border
         ctx.globalAlpha = 1;
         ctx.lineWidth = 1;
         ctx.fillStyle = "#000";
-        ctx.fillRect(2, 2, this.size[0] - 4, this.size[1] - 4);
+        ctx.fillRect(track.x - 2, track.y - 2, track.width + 4, track.height + 4);
 
         ctx.fillStyle = this.properties.color;
         ctx.beginPath();
-        ctx.rect(4, 4, (this.size[0] - 8) * this.value, this.size[1] - 8);
+        ctx.rect(track.x, track.y, track.width * this.value, track.height);
         ctx.fill();
     };
 
@@ -584,7 +599,8 @@
 
         var v = this.value;
         var delta = m[0] - this.oldmouse[0];
-        v += delta / this.size[0];
+        //against the track, not the node, so the bar keeps up with the pointer
+        v += delta / this.getTrack().width;
         if (v > 1.0) {
             v = 1.0;
         } else if (v < 0.0) {
@@ -633,7 +649,10 @@
             (this.properties.max - this.properties.min);
         v = Math.min(1, v);
         v = Math.max(0, v);
-        ctx.fillRect(2, 2, (this.size[0] - 4) * v, this.size[1] - 4);
+        //start clear of the input slot on the left, which the bar used to cover
+        var left =
+            2 + (this.inputs && this.inputs.length ? LiteGraph.NODE_SLOT_HEIGHT : 0);
+        ctx.fillRect(left, 2, Math.max(0, this.size[0] - 2 - left) * v, this.size[1] - 4);
     };
 
     LiteGraph.registerNodeType("widget/progress", WidgetProgress);

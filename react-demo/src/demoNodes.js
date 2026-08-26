@@ -26,6 +26,19 @@ function palette(graphcanvas) {
     };
 }
 
+/**
+ * Where a node body is free to draw: below its slot rows. Anything painted above
+ * this lands on top of a slot's dot and name, which is what the swatch used to do
+ * with its hex readout.
+ */
+function contentTop() {
+    const rows = Math.max(
+        this.inputs ? this.inputs.length : 0,
+        this.outputs ? this.outputs.length : 0
+    );
+    return rows * LiteGraph.NODE_SLOT_HEIGHT + 8;
+}
+
 /* ----------------------------------------------------------------- oscillator */
 
 function Oscillator() {
@@ -181,14 +194,7 @@ function Gauge() {
 Gauge.title = "Gauge";
 Gauge.desc = "Dial readout for a single number";
 
-/** Where the node body is free to draw, below the slot rows. */
-Gauge.prototype.contentTop = function () {
-    const rows = Math.max(
-        this.inputs ? this.inputs.length : 0,
-        this.outputs ? this.outputs.length : 0
-    );
-    return rows * LiteGraph.NODE_SLOT_HEIGHT + 8;
-};
+Gauge.prototype.contentTop = contentTop;
 
 /**
  * Dial geometry for the node's current size. Kept separate from the drawing so a
@@ -340,18 +346,28 @@ function Swatch() {
     this.addInput("b", "number");
     this.addOutput("hex", "string");
     this.properties = { r: 0.9, g: 0.5, b: 0.2 };
-    this.size = [160, 110];
+    this.size = [170, 130];
     this._hex = "#000000";
+    this._channels = [0, 0, 0];
 }
 
 Swatch.title = "Swatch";
 Swatch.desc = "Mixes three channels into a colour";
+
+Swatch.prototype.contentTop = contentTop;
+
+/** Black or white, whichever will read against the mixed colour. */
+Swatch.prototype.inkColor = function () {
+    const [r, g, b] = this._channels;
+    return 0.299 * r + 0.587 * g + 0.114 * b > 0.6 ? "#101010" : "#f4f4f4";
+};
 
 Swatch.prototype.onExecute = function () {
     const channels = ["r", "g", "b"].map((key, index) => {
         const wired = this.getInputData(index);
         return clamp01(wired == null ? this.properties[key] : wired);
     });
+    this._channels = channels;
     this._hex =
         "#" +
         channels
@@ -366,20 +382,29 @@ Swatch.prototype.onDrawBackground = function (ctx, graphcanvas) {
     }
     const colors = palette(graphcanvas);
     const x = 8;
-    const y = 62;
+    // Below the three input rows: the hex used to be written above the chip,
+    // straight through the "b" slot's label.
+    const y = this.contentTop();
     const w = this.size[0] - 16;
     const h = this.size[1] - y - 8;
     if (w < 12 || h < 6) {
         return;
     }
+
     ctx.fillStyle = this._hex;
     ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = colors.line;
     ctx.lineWidth = 1;
     ctx.strokeRect(x, y, w, h);
-    ctx.fillStyle = colors.text;
-    ctx.font = "11px monospace";
-    ctx.fillText(this._hex.toUpperCase(), x + 4, y - 4);
+
+    // The reading goes inside the chip, in whichever ink survives the colour.
+    if (h >= 18 && w >= 60) {
+        ctx.fillStyle = this.inkColor();
+        ctx.font = "11px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(this._hex.toUpperCase(), x + w / 2, y + h / 2 + 4);
+        ctx.textAlign = "left";
+    }
 };
 
 /* ------------------------------------------------------------------ metronome */
