@@ -23,31 +23,23 @@
             return;
         }
         var margin = 10;
+        //keep the button clear of the output slots down the right hand side,
+        //which its box used to run straight into
+        var reserved =
+            this.outputs && this.outputs.length ? LiteGraph.NODE_SLOT_HEIGHT : 0;
+        var width = Math.max(8, this.size[0] - margin * 2 - reserved);
+        var height = Math.max(8, this.size[1] - margin * 2);
+
         ctx.fillStyle = "black";
-        ctx.fillRect(
-            margin + 1,
-            margin + 1,
-            this.size[0] - margin * 2,
-            this.size[1] - margin * 2
-        );
+        ctx.fillRect(margin + 1, margin + 1, width, height);
         ctx.fillStyle = "#AAF";
-        ctx.fillRect(
-            margin - 1,
-            margin - 1,
-            this.size[0] - margin * 2,
-            this.size[1] - margin * 2
-        );
+        ctx.fillRect(margin - 1, margin - 1, width, height);
         ctx.fillStyle = this.clicked
             ? "white"
             : this.mouseOver
             ? "#668"
             : "#334";
-        ctx.fillRect(
-            margin,
-            margin,
-            this.size[0] - margin * 2,
-            this.size[1] - margin * 2
-        );
+        ctx.fillRect(margin, margin, width, height);
 
         if (this.properties.text || this.properties.text === 0) {
             var font_size = this.properties.font_size || 30;
@@ -56,8 +48,8 @@
             ctx.font = font_size + "px " + WidgetButton.font;
             ctx.fillText(
                 this.properties.text,
-                this.size[0] * 0.5,
-                this.size[1] * 0.5 + font_size * 0.3
+                margin + width * 0.5,
+                margin + height * 0.5 + font_size * 0.3
             );
             ctx.textAlign = "left";
         }

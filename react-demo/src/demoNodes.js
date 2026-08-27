@@ -27,6 +27,19 @@ function palette(graphcanvas) {
 }
 
 /**
+ * A default size that is never smaller than the node's own slots and widgets
+ * need. LiteGraph draws widgets directly below the last slot whether or not
+ * there is room, so a hand-picked size that is a row short puts the widget
+ * through the slot above it and off the bottom edge.
+ *
+ * Call it last in the constructor, once the slots and widgets exist.
+ */
+function fitSize(node, preferred) {
+    const required = node.computeSize();
+    return [Math.max(preferred[0], required[0]), Math.max(preferred[1], required[1])];
+}
+
+/**
  * Where a node body is free to draw: below its slot rows. Anything painted above
  * this lands on top of a slot's dot and name, which is what the swatch used to do
  * with its hex readout.
@@ -48,7 +61,7 @@ function Oscillator() {
     this.addWidget("combo", "waveform", "sine", "waveform", { values: WAVEFORMS });
     this.addWidget("number", "frequency", 0.4, "frequency", { min: 0.02, max: 4, step: 0.2 });
     this.addWidget("number", "amplitude", 1, "amplitude", { min: 0, max: 2, step: 0.2 });
-    this.size = [210, 106];
+    this.size = fitSize(this, [210, 106]);
 }
 
 Oscillator.title = "Oscillator";
@@ -94,7 +107,7 @@ function Scope() {
     this.addOutput("signal", "number");
     this.properties = { range: 1 };
     this.addWidget("number", "range", 1, "range", { min: 0.1, max: 10, step: 0.5 });
-    this.size = [240, 150];
+    this.size = fitSize(this, [240, 150]);
     this._samples = new Float32Array(SCOPE_SAMPLES);
     this._head = 0;
     this._filled = 0;
@@ -187,7 +200,7 @@ const GAUGE_TRACK_MAX = 8;
 function Gauge() {
     this.addInput("value", "number");
     this.properties = { min: -1, max: 1, label: "" };
-    this.size = [180, 150];
+    this.size = fitSize(this, [180, 150]);
     this._value = 0;
 }
 
@@ -346,7 +359,7 @@ function Swatch() {
     this.addInput("b", "number");
     this.addOutput("hex", "string");
     this.properties = { r: 0.9, g: 0.5, b: 0.2 };
-    this.size = [170, 130];
+    this.size = fitSize(this, [170, 130]);
     this._hex = "#000000";
     this._channels = [0, 0, 0];
 }
@@ -414,7 +427,7 @@ function Metronome() {
     this.addOutput("beat", "number");
     this.properties = { interval: 1 };
     this.addWidget("number", "interval", 1, "interval", { min: 0.1, max: 10, step: 0.5 });
-    this.size = [180, 60];
+    this.size = fitSize(this, [180, 60]);
     this._next = 0;
     this._beat = 0;
 }
@@ -449,7 +462,7 @@ Metronome.prototype.onExecute = function () {
 
 function Note() {
     this.properties = { text: "Double-click a wire to add a reroute point." };
-    this.size = [240, 110];
+    this.size = fitSize(this, [240, 110]);
 }
 
 Note.title = "Note";

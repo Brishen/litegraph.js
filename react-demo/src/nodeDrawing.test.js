@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { LiteGraph, LGraph } from "../../src/litegraph.mjs";
 import "./demoSetup.js";
 import { recordingContext } from "./test/recordingContext.js";
+import { DEMO_NODE_TYPES } from "./demoNodes.js";
 
 const THEME = { theme: LiteGraph };
 
@@ -191,6 +192,28 @@ describe("the other drawing nodes stay inside themselves", () => {
     });
 });
 
+describe("default sizes fit what the node contains", () => {
+    // LiteGraph puts widgets directly under the last slot regardless of the
+    // node's height, so a default size that is a row short pushes the widget
+    // through the slot above it and off the bottom edge.
+    it.each(DEMO_NODE_TYPES.map(([type]) => [type]))(
+        "%s is at least the size its slots and widgets need",
+        (type) => {
+            const node = LiteGraph.createNode(type);
+            const required = node.computeSize();
+            expect(node.size[0]).toBeGreaterThanOrEqual(required[0]);
+            expect(node.size[1]).toBeGreaterThanOrEqual(required[1]);
+        }
+    );
+
+    it("leaves room below the widgets on a node that has them", () => {
+        const metronome = LiteGraph.createNode("demo/metronome");
+        const slotRows = metronome.outputs.length * LiteGraph.NODE_SLOT_HEIGHT;
+        const widgets = metronome.widgets.length * (LiteGraph.NODE_WIDGET_HEIGHT + 4);
+        expect(metronome.size[1]).toBeGreaterThanOrEqual(slotRows + widgets);
+    });
+});
+
 describe("nothing draws over a slot row", () => {
     /** The vertical band a node's slot dots and labels occupy. */
     function slotRows(node) {
@@ -264,6 +287,16 @@ describe("nothing draws over a slot row", () => {
 
         // The slot dot is centred half a slot height in from the right edge.
         const dotLeft = slider.size[0] - LiteGraph.NODE_SLOT_HEIGHT * 0.5 - 4;
+        expect(box.right).toBeLessThan(dotLeft);
+    });
+
+    it("the button box stops before its output slots", () => {
+        const button = build("widget/button", null, null);
+        const ctx = recordingContext();
+        button.onDrawForeground(ctx, THEME);
+        const box = ctx.bounds();
+
+        const dotLeft = button.size[0] - LiteGraph.NODE_SLOT_HEIGHT * 0.5 - 4;
         expect(box.right).toBeLessThan(dotLeft);
     });
 
